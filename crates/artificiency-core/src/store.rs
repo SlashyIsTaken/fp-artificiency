@@ -43,13 +43,33 @@ impl Granularity {
 }
 
 #[derive(Debug, Serialize)]
-pub struct DailyUsage {
-    pub day: String,
+pub struct UsageBucket {
+    /// Bucket key in local time: "2026-07-13" (day) or "2026-07-13T15:00" (hour/minute).
+    pub bucket: String,
     pub turns: i64,
     pub tokens_in: i64,
     pub tokens_out: i64,
     pub cache_read: i64,
     pub cache_write: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bucket {
+    Minute,
+    Hour,
+    Day,
+}
+
+impl Bucket {
+    /// SQL expression producing the bucket key. Buckets are computed in local
+    /// time (the user's clock), while range filtering stays on raw UTC ts.
+    fn sql_expr(self) -> &'static str {
+        match self {
+            Bucket::Minute => "strftime('%Y-%m-%dT%H:%M', ts, 'localtime')",
+            Bucket::Hour => "strftime('%Y-%m-%dT%H:00', ts, 'localtime')",
+            Bucket::Day => "date(ts, 'localtime')",
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -170,19 +190,34 @@ impl Store {
         Ok(())
     }
 
-    /// Per-day turn totals for the last `days` days (UTC days, ISO timestamps).
-    /// Days without activity are absent; the UI fills gaps.
-    pub fn daily(&self, days: i64) -> Result<Vec<DailyUsage>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT date(ts), COUNT(*), SUM(tokens_in), SUM(tokens_out),
+    /// SQL fragment + parameter for range filtering. `hours = None` means
+    /// all time. The threshold is rendered in the same ISO-T shape as stored
+    /// timestamps so plain string comparison is correct.
+    fn since_clause(hours: Option<i64>) -> (&'static str, Option<String>) {
+        match hours {
+            Some(h) => (
+                "AND ts >= strftime('%Y-%m-%dT%H:%M:%S', 'now', ?1)",
+                Some(format!("-{h} hours")),
+            ),
+            None => ("AND ?1 IS NULL", None),
+        }
+    }
+
+    /// Bucketed turn totals over the last `hours` (or all time). Buckets
+    /// without activity are absent; the UI fills gaps.
+    pub fn series(&self, hours: Option<i64>, bucket: Bucket) -> Result<Vec<UsageBucket>> {
+        let (clause, param) = Self::since_clause(hours);
+        let expr = bucket.sql_expr();
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {expr}, COUNT(*), SUM(tokens_in), SUM(tokens_out),
                     SUM(cache_read), SUM(cache_write)
              FROM events
-             WHERE granularity = 'turn' AND date(ts) >= date('now', ?1)
-             GROUP BY date(ts) ORDER BY date(ts)",
-        )?;
-        let rows = stmt.query_map(params![format!("-{days} days")], |r| {
-            Ok(DailyUsage {
-                day: r.get(0)?,
+             WHERE granularity = 'turn' {clause}
+             GROUP BY {expr} ORDER BY {expr}"
+        ))?;
+        let rows = stmt.query_map(params![param], |r| {
+            Ok(UsageBucket {
+                bucket: r.get(0)?,
                 turns: r.get(1)?,
                 tokens_in: r.get(2)?,
                 tokens_out: r.get(3)?,
@@ -193,17 +228,18 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
-    /// Totals per model, largest output first.
-    pub fn by_model(&self) -> Result<Vec<ModelUsage>> {
-        let mut stmt = self.conn.prepare(
+    /// Totals per model within the range, largest output first.
+    pub fn by_model(&self, hours: Option<i64>) -> Result<Vec<ModelUsage>> {
+        let (clause, param) = Self::since_clause(hours);
+        let mut stmt = self.conn.prepare(&format!(
             "SELECT COALESCE(model, 'unknown'), COUNT(*), SUM(tokens_in),
                     SUM(tokens_out), SUM(cache_read), SUM(cache_write)
              FROM events
-             WHERE granularity = 'turn'
+             WHERE granularity = 'turn' {clause}
              GROUP BY COALESCE(model, 'unknown')
-             ORDER BY SUM(tokens_out) DESC",
-        )?;
-        let rows = stmt.query_map([], |r| {
+             ORDER BY SUM(tokens_out) DESC"
+        ))?;
+        let rows = stmt.query_map(params![param], |r| {
             Ok(ModelUsage {
                 model: r.get(0)?,
                 turns: r.get(1)?,
@@ -216,13 +252,18 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
-    pub fn overview(&self) -> Result<Overview> {
-        let mut ov = self.conn.query_row(
-            "SELECT COUNT(*), COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0),
-                    COALESCE(SUM(cache_read), 0), COALESCE(SUM(cache_write), 0),
-                    MIN(ts), MAX(ts)
-             FROM events WHERE granularity = 'turn'",
-            [],
+    /// Totals over the last `hours`, or all time when `hours` is None.
+    /// Sessions counts sessions *active in the range* (distinct in events).
+    pub fn overview(&self, hours: Option<i64>) -> Result<Overview> {
+        let (clause, param) = Self::since_clause(hours);
+        let ov = self.conn.query_row(
+            &format!(
+                "SELECT COUNT(*), COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0),
+                        COALESCE(SUM(cache_read), 0), COALESCE(SUM(cache_write), 0),
+                        MIN(ts), MAX(ts), COUNT(DISTINCT session_id)
+                 FROM events WHERE granularity = 'turn' {clause}"
+            ),
+            params![param],
             |r| {
                 Ok(Overview {
                     turns: r.get(0)?,
@@ -232,13 +273,11 @@ impl Store {
                     cache_write: r.get(4)?,
                     first_ts: r.get(5)?,
                     last_ts: r.get(6)?,
+                    sessions: r.get(7)?,
                     ..Default::default()
                 })
             },
         )?;
-        ov.sessions = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))?;
         Ok(ov)
     }
 }

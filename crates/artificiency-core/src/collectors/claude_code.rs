@@ -211,23 +211,27 @@ mod tests {
         ingest_file(&store, &path, &mut report3).unwrap();
         assert_eq!(report3.events_added, 1);
 
-        let ov = store.overview().unwrap();
+        let ov = store.overview(None).unwrap();
         assert_eq!(ov.turns, 2);
         assert_eq!(ov.tokens_in, 5743);
         assert_eq!(ov.sessions, 1);
 
-        // Rollups over the ingested turns (both landed on 2026-07-13, far in
-        // the past relative to nothing — query a wide window).
-        let daily = store.daily(36500).unwrap();
-        assert_eq!(daily.len(), 1);
-        assert_eq!(daily[0].day, "2026-07-13");
-        assert_eq!(daily[0].turns, 2);
-        assert_eq!(daily[0].tokens_out, 477);
+        // All-time rollups over the ingested turns.
+        let series = store.series(None, crate::store::Bucket::Day).unwrap();
+        assert_eq!(series.len(), 1); // both turns fall on the same (local) day
+        assert_eq!(series[0].turns, 2);
+        assert_eq!(series[0].tokens_out, 477);
 
-        let models = store.by_model().unwrap();
+        let models = store.by_model(None).unwrap();
         assert_eq!(models.len(), 2); // opus + the model-less second turn
         assert_eq!(models[0].model, "claude-opus-4-8");
         assert_eq!(models[1].model, "unknown");
+
+        // Range filtering: the fixed 2026-07-13 timestamps are in the past,
+        // so a 1-hour window is empty.
+        let recent = store.overview(Some(1)).unwrap();
+        assert_eq!(recent.turns, 0);
+        assert_eq!(recent.sessions, 0);
 
         std::fs::remove_dir_all(&dir).ok();
     }

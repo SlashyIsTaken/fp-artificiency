@@ -11,7 +11,7 @@
   const H = 180;
   const PAD_L = 44;
   const PAD_B = 20;
-  const PAD_T = 8;
+  const PAD_T = 22; // headroom so the peak's direct label never clips
 
   const compact = new Intl.NumberFormat("en", {
     notation: "compact",

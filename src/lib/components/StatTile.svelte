@@ -1,9 +1,18 @@
 <script lang="ts">
-  let { label, value, hint }: { label: string; value: string; hint?: string } = $props();
+  import InfoTip from "./InfoTip.svelte";
+
+  let {
+    label,
+    value,
+    hint,
+    tip,
+  }: { label: string; value: string; hint?: string; tip?: string } = $props();
 </script>
 
 <div class="tile">
-  <div class="label">{label}</div>
+  <div class="label">
+    {#if tip}<InfoTip text={label} {tip} />{:else}{label}{/if}
+  </div>
   <div class="value">{value}</div>
   {#if hint}<div class="hint">{hint}</div>{/if}
 </div>

@@ -19,8 +19,8 @@ export interface IngestReport {
   lines_skipped: number;
 }
 
-export interface DailyUsage {
-  day: string;
+export interface UsageBucket {
+  bucket: string;
   turns: number;
   tokens_in: number;
   tokens_out: number;
@@ -41,7 +41,9 @@ export function inTauri(): boolean {
   return "__TAURI_INTERNALS__" in window;
 }
 
-export const getOverview = () => invoke<Overview>("overview");
+// hours = 0 means all time.
+export const getOverview = (hours: number) => invoke<Overview>("overview", { hours });
 export const runBackfill = () => invoke<IngestReport>("backfill");
-export const getDaily = (days: number) => invoke<DailyUsage[]>("daily", { days });
-export const getByModel = () => invoke<ModelUsage[]>("by_model");
+export const getSeries = (hours: number, bucket: string) =>
+  invoke<UsageBucket[]>("series", { hours, bucket });
+export const getByModel = (hours: number) => invoke<ModelUsage[]>("by_model", { hours });

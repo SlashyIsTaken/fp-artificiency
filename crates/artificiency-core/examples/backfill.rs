@@ -13,5 +13,5 @@ fn main() {
     let dir = claude_code::default_projects_dir().expect("home dir");
     let report = claude_code::backfill(&store, &dir).expect("backfill");
     println!("{report:#?}");
-    println!("{:#?}", store.overview().expect("overview"));
+    println!("{:#?}", store.overview(None).expect("overview"));
 }

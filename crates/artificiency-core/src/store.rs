@@ -42,6 +42,26 @@ impl Granularity {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct DailyUsage {
+    pub day: String,
+    pub turns: i64,
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    pub cache_read: i64,
+    pub cache_write: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelUsage {
+    pub model: String,
+    pub turns: i64,
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    pub cache_read: i64,
+    pub cache_write: i64,
+}
+
 #[derive(Debug, Serialize, Default)]
 pub struct Overview {
     pub sessions: i64,
@@ -148,6 +168,52 @@ impl Store {
             params![path, offset as i64],
         )?;
         Ok(())
+    }
+
+    /// Per-day turn totals for the last `days` days (UTC days, ISO timestamps).
+    /// Days without activity are absent; the UI fills gaps.
+    pub fn daily(&self, days: i64) -> Result<Vec<DailyUsage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT date(ts), COUNT(*), SUM(tokens_in), SUM(tokens_out),
+                    SUM(cache_read), SUM(cache_write)
+             FROM events
+             WHERE granularity = 'turn' AND date(ts) >= date('now', ?1)
+             GROUP BY date(ts) ORDER BY date(ts)",
+        )?;
+        let rows = stmt.query_map(params![format!("-{days} days")], |r| {
+            Ok(DailyUsage {
+                day: r.get(0)?,
+                turns: r.get(1)?,
+                tokens_in: r.get(2)?,
+                tokens_out: r.get(3)?,
+                cache_read: r.get(4)?,
+                cache_write: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Totals per model, largest output first.
+    pub fn by_model(&self) -> Result<Vec<ModelUsage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT COALESCE(model, 'unknown'), COUNT(*), SUM(tokens_in),
+                    SUM(tokens_out), SUM(cache_read), SUM(cache_write)
+             FROM events
+             WHERE granularity = 'turn'
+             GROUP BY COALESCE(model, 'unknown')
+             ORDER BY SUM(tokens_out) DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(ModelUsage {
+                model: r.get(0)?,
+                turns: r.get(1)?,
+                tokens_in: r.get(2)?,
+                tokens_out: r.get(3)?,
+                cache_read: r.get(4)?,
+                cache_write: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
     pub fn overview(&self) -> Result<Overview> {

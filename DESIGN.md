@@ -164,6 +164,17 @@ per-file byte offset for incremental ingestion.
 | Store | SQLite (XDG data dir) | single file, future CLI/headless mode reads the same DB |
 | v1 scope | **Claude Code collector only**; schema designed on paper against Codex + a billing-style aggregate source | ship fast; revisit abstraction with a real second collector before declaring the interface stable |
 
+## UI backlog (Floran's feedback, 2026-07-13 — not yet scheduled)
+
+- **Date-range selector** with predefined options scaling from hours to months
+  (e.g. 1h · 24h · 7d · 30d · 3mo · all). Must be one-click, UX-friendly, and
+  apply across the whole dashboard.
+- **Sidebar navigation** between multiple dashboards; the current view becomes
+  "General overview", sidebar entry #1. Future entries: waste diagnosis, plugin
+  impact, config integrity, per-project deep dives.
+- **Term tooltips**: hoverable explanations on jargon (sessions, turns, tokens,
+  cache reads/writes) so non-expert users can read the dashboard.
+
 ## Open questions
 
 - Enricher install mechanics: exact merge/remove strategy for our SessionStart

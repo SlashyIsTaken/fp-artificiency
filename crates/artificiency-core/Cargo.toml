@@ -1,0 +1,13 @@
+[package]
+name = "artificiency-core"
+description = "Store, collectors, and stats engine for fp-artificiency"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
+dirs = "5"
+thiserror = "2"

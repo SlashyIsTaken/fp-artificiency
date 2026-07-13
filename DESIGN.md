@@ -53,7 +53,55 @@ Fully self-contained single app — no external plugin marketplace dependency.
 
 First-run experience: install → claude-code collector backfills existing
 transcript history (~weeks of data already on disk) → dashboard is instantly
-populated. Enrichment is an opt-in click afterwards.
+populated.
+
+### Enrichment toggle
+
+Enrichment is a **toggle, presented during onboarding, default ON**:
+
+- **Onboarding**: one step, checkbox pre-checked, showing *exactly* what will be
+  installed — the literal hook JSON and the one command it runs. Transparency is
+  non-negotiable (see integrity guard below: we use the same mechanism malware
+  abuses, so we must be auditably clean).
+- **ON**: hook installs (merge into `~/.claude/settings.json`, never clobber),
+  data gathers, and the enrichment-dependent panels (plugin A/B, roster history)
+  appear in the dashboard.
+- **OFF**: hook is removed. The dependent panels don't vanish — they render as
+  **ghost panels**: greyed placeholder cards showing what the panel *would*
+  answer ("Which plugin changes actually saved you tokens?") with an inline
+  enable button. Passive, in-place, never notifications or nags — consistent
+  with the Flarepoint inform-don't-enforce ethos.
+- Toggleable at any time from settings; state changes are recorded as markers
+  so stats honestly show coverage gaps.
+
+### Config integrity guard
+
+Motivated directly by the **Miasma worm** (TeamPCP/UNC6780, June 2026): a
+self-spreading supply-chain worm that persisted by injecting into the
+SessionStart hooks of 13 AI coding tools — including Claude Code via
+repo-carried `.claude/settings.json` — executing a credential stealer the
+moment a developer opened a compromised repo. fp-artificiency already watches
+`~/.claude`; guarding the config is a natural extension.
+
+- **Scope**: user-level `~/.claude/settings.json` (+ `.local`), and
+  project-level `.claude/settings.json` for every project seen in
+  `~/.claude/projects` — project-level is the actual Miasma vector.
+  Highest-sensitivity keys: `hooks` (anything that executes), `mcpServers`,
+  `apiKeyHelper`, `env`.
+- **Mechanic**: baseline hash per config file; on change, diff and classify.
+  New or modified hook commands trigger a warning with the literal diff.
+  Heuristics flag known-bad shapes (base64 blobs, `curl … | sh`, writes to
+  shell profiles / `.pth` files, unexpected network fetches) with a stated
+  reason.
+- **Self-attestation**: the app records the exact content of its own enricher
+  hook. It never false-alarms on itself, and — the flip side — if *our* hook
+  is ever modified by something else, that is itself a high-severity alert.
+- **Surface, don't act**: warn with evidence and a suggested action (review
+  diff, remove hook); never auto-modify the user's config beyond our own hook.
+  Fail open: guard errors must never block the app or Claude Code.
+- Positioning note: this is defense-in-depth alongside Claude Code's own trust
+  prompts — Miasma proved people click through those. "The usage app that also
+  noticed the worm" is an excellent story.
 
 ## Data model
 
@@ -118,8 +166,14 @@ per-file byte offset for incremental ingestion.
 
 ## Open questions
 
-- Enricher UX: exactly how the app writes/removes its SessionStart hook in
-  `~/.claude/settings.json` safely (merge, don't clobber; fail open).
+- Enricher install mechanics: exact merge/remove strategy for our SessionStart
+  hook in `~/.claude/settings.json` (merge, don't clobber; fail open; restore
+  on uninstall).
+- Integrity guard baseline bootstrapping: first run sees configs already in an
+  unknown state — trust-on-first-use vs. heuristic scan of the initial state.
+- Guard alert surface: dashboard-only, or also a system notification for
+  high-severity hits (a worm in a hook arguably justifies breaking the
+  no-notifications rule)?
 - Pricing table refresh source + cadence; offline behavior.
 - Retention: transcripts get cleaned up by CC (`cleanupPeriodDays`) — our SQLite
   store becomes the durable history. Import-once semantics and dedup on rescan.

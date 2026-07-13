@@ -1,6 +1,13 @@
 # fp-artificiency — Design
 
 *Flarepoint | Artificial Efficiency. Local-first AI usage analytics.*
+
+**Branding rule (2026-07-13):** the product presents as **"Artificiency"** —
+clean, no prefix — in all user-facing surfaces (window title, sidebar, docs
+prose). The full **"Flarepoint Artificiency"** appears only in credit-worthy
+spots: settings/about pages and the bundle identifier
+(`com.flarepoint.artificiency`). `fp-artificiency` stays as the repo/package
+technical id only.
 *Status: design settled 2026-07-13, pre-implementation.*
 
 ## Positioning

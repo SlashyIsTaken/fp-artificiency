@@ -1,4 +1,6 @@
 <script lang="ts">
+  import UsageMeters from "./UsageMeters.svelte";
+
   export interface NavItem {
     id: string;
     label: string;
@@ -18,7 +20,7 @@
 
 <nav>
   <div class="brand">
-    <div class="name">fp-artificiency</div>
+    <div class="name">Artificiency</div>
     <div class="tag">Artificial Efficiency</div>
   </div>
   {#each items as item}
@@ -31,6 +33,7 @@
       {#if !item.enabled}<span class="soon">soon</span>{/if}
     </button>
   {/each}
+  <UsageMeters />
 </nav>
 
 <style>
@@ -42,6 +45,13 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    /* pin to the viewport: the main panel scrolls, the sidebar doesn't,
+       so the usage meters stay visible at the app's bottom edge */
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    align-self: flex-start;
+    overflow-y: auto;
   }
   .brand {
     padding: 0 0.6rem 1rem;

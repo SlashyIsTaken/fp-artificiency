@@ -32,6 +32,23 @@ CREATE TABLE IF NOT EXISTS markers (
   payload     TEXT
 );
 
+-- One row per tool invocation, for waste diagnosis. `result_chars` is the
+-- serialized size of the tool result (filled in when the result record is
+-- seen); a rough proxy for context volume (~4 chars per token).
+CREATE TABLE IF NOT EXISTS tool_calls (
+  id           INTEGER PRIMARY KEY,
+  session_id   TEXT NOT NULL,
+  ts           TEXT NOT NULL,
+  tool         TEXT NOT NULL,
+  target       TEXT,
+  result_chars INTEGER,
+  dedup_key    TEXT UNIQUE,
+  meta         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_calls_ts ON tool_calls (ts);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_lookup ON tool_calls (session_id, tool, target);
+
 -- Incremental ingestion bookkeeping: byte offset per source file.
 CREATE TABLE IF NOT EXISTS ingest_files (
   path        TEXT PRIMARY KEY,

@@ -8,6 +8,14 @@
   --text-secondary: #52514e;
   --text-muted: #8a887f;
   --accent: #2a78d6;
+  /* categorical slots (validated for the light surface) */
+  --series-1: #2a78d6;
+  --series-2: #1baf7a;
+  --series-3: #eda100;
+  --series-4: #008300;
+  /* status (icon+label always accompanies; never used as a series) */
+  --status-warning: #fab219;
+  --status-critical: #d03b3b;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -19,6 +27,11 @@
     --text-secondary: #c3c2b7;
     --text-muted: #8a887f;
     --accent: #3987e5;
+    /* same hues stepped for the dark surface (validated) */
+    --series-1: #3987e5;
+    --series-2: #199e70;
+    --series-3: #c98500;
+    --series-4: #008300;
   }
 }
 

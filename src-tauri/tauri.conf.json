@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "fp-artificiency",
+  "productName": "Artificiency",
   "version": "0.1.0",
   "identifier": "com.flarepoint.artificiency",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "fp-artificiency",
+        "title": "Artificiency",
         "width": 1150,
         "height": 760,
         "minWidth": 720,

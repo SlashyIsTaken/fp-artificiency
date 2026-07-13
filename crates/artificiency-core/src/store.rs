@@ -82,6 +82,46 @@ pub struct ModelUsage {
     pub cache_write: i64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ModelBucket {
+    pub bucket: String,
+    pub model: String,
+    pub tokens_out: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToolStat {
+    pub tool: String,
+    pub calls: i64,
+    pub chars: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DupRead {
+    pub target: String,
+    pub reads: i64,
+    /// Reads beyond the first, per session, summed.
+    pub extra: i64,
+    pub wasted_chars: i64,
+    pub sessions: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BigResult {
+    pub tool: String,
+    pub target: Option<String>,
+    pub chars: i64,
+    pub ts: String,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct WasteSummary {
+    pub tool_calls: i64,
+    pub extra_reads: i64,
+    pub wasted_chars: i64,
+    pub biggest_chars: i64,
+}
+
 #[derive(Debug, Serialize, Default)]
 pub struct Overview {
     pub sessions: i64,
@@ -104,13 +144,32 @@ impl Store {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(SCHEMA)?;
+        Self::migrate(&conn)?;
         Ok(Store { conn })
     }
 
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
+        Self::migrate(&conn)?;
         Ok(Store { conn })
+    }
+
+    /// Idempotent data migrations for stores created by earlier versions.
+    fn migrate(conn: &Connection) -> Result<()> {
+        // `<synthetic>` turns are Claude Code's locally generated placeholder
+        // messages (API errors etc.), not real model calls; newer collectors
+        // skip them at parse time.
+        conn.execute("DELETE FROM events WHERE model = '<synthetic>'", [])?;
+        // Stores populated before tool-call collection existed have consumed
+        // the transcripts already; reset offsets once so tool calls get
+        // backfilled (event dedup keys make the re-read idempotent).
+        let tools: i64 = conn.query_row("SELECT COUNT(*) FROM tool_calls", [], |r| r.get(0))?;
+        let events: i64 = conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))?;
+        if tools == 0 && events > 0 {
+            conn.execute("DELETE FROM ingest_files", [])?;
+        }
+        Ok(())
     }
 
     /// Default on-disk location: XDG data dir (e.g. ~/.local/share/fp-artificiency).
@@ -164,6 +223,131 @@ impl Store {
             ],
         )?;
         Ok(n > 0)
+    }
+
+    pub fn insert_tool_use(
+        &self,
+        session_id: &str,
+        ts: &str,
+        tool: &str,
+        target: Option<&str>,
+        dedup_key: &str,
+    ) -> Result<bool> {
+        let n = self.conn.execute(
+            "INSERT OR IGNORE INTO tool_calls (session_id, ts, tool, target, dedup_key)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![session_id, ts, tool, target, dedup_key],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Record the result size for a previously inserted tool call.
+    pub fn set_tool_result_chars(&self, dedup_key: &str, chars: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tool_calls SET result_chars = ?2 WHERE dedup_key = ?1",
+            params![dedup_key, chars],
+        )?;
+        Ok(())
+    }
+
+    /// Calls and result volume per tool within the range, largest volume first.
+    pub fn tool_stats(&self, hours: Option<i64>) -> Result<Vec<ToolStat>> {
+        let (clause, param) = Self::since_clause(hours);
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT tool, COUNT(*), COALESCE(SUM(result_chars), 0)
+             FROM tool_calls WHERE 1=1 {clause}
+             GROUP BY tool ORDER BY SUM(COALESCE(result_chars, 0)) DESC"
+        ))?;
+        let rows = stmt.query_map(params![param], |r| {
+            Ok(ToolStat {
+                tool: r.get(0)?,
+                calls: r.get(1)?,
+                chars: r.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Files read more than once within a session, aggregated across sessions,
+    /// worst waste first. Wasted volume estimates the repeats at the file's
+    /// average result size.
+    pub fn duplicate_reads(&self, hours: Option<i64>, limit: i64) -> Result<Vec<DupRead>> {
+        let (clause, param) = Self::since_clause(hours);
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT target, SUM(cnt), SUM(cnt - 1),
+                    CAST(SUM((cnt - 1.0) * avg_chars) AS INTEGER), COUNT(*)
+             FROM (
+               SELECT session_id, target, COUNT(*) AS cnt,
+                      AVG(COALESCE(result_chars, 0)) AS avg_chars
+               FROM tool_calls
+               WHERE tool = 'Read' AND target IS NOT NULL {clause}
+               GROUP BY session_id, target HAVING COUNT(*) > 1
+             )
+             GROUP BY target ORDER BY 4 DESC LIMIT ?2"
+        ))?;
+        let rows = stmt.query_map(params![param, limit], |r| {
+            Ok(DupRead {
+                target: r.get(0)?,
+                reads: r.get(1)?,
+                extra: r.get(2)?,
+                wasted_chars: r.get(3)?,
+                sessions: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Largest single tool results within the range.
+    pub fn largest_results(&self, hours: Option<i64>, limit: i64) -> Result<Vec<BigResult>> {
+        let (clause, param) = Self::since_clause(hours);
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT tool, target, result_chars, ts FROM tool_calls
+             WHERE result_chars IS NOT NULL {clause}
+             ORDER BY result_chars DESC LIMIT ?2"
+        ))?;
+        let rows = stmt.query_map(params![param, limit], |r| {
+            Ok(BigResult {
+                tool: r.get(0)?,
+                target: r.get(1)?,
+                chars: r.get(2)?,
+                ts: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn waste_summary(&self, hours: Option<i64>) -> Result<WasteSummary> {
+        let (clause, param) = Self::since_clause(hours);
+        let mut sum = self.conn.query_row(
+            &format!(
+                "SELECT COUNT(*), COALESCE(MAX(result_chars), 0)
+                 FROM tool_calls WHERE 1=1 {clause}"
+            ),
+            params![param],
+            |r| {
+                Ok(WasteSummary {
+                    tool_calls: r.get(0)?,
+                    biggest_chars: r.get(1)?,
+                    ..Default::default()
+                })
+            },
+        )?;
+        let (clause, param) = Self::since_clause(hours);
+        (sum.extra_reads, sum.wasted_chars) = self.conn.query_row(
+            &format!(
+                "SELECT COALESCE(SUM(cnt - 1), 0),
+                        COALESCE(CAST(SUM((cnt - 1.0) * avg_chars) AS INTEGER), 0)
+                 FROM (
+                   SELECT COUNT(*) AS cnt, AVG(COALESCE(result_chars, 0)) AS avg_chars
+                   FROM tool_calls
+                   WHERE tool = 'Read' AND target IS NOT NULL {clause}
+                   GROUP BY session_id, target HAVING COUNT(*) > 1
+                 )"
+            ),
+            params![param],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok(sum)
     }
 
     pub fn file_offset(&self, path: &str) -> Result<u64> {
@@ -223,6 +407,26 @@ impl Store {
                 tokens_out: r.get(3)?,
                 cache_read: r.get(4)?,
                 cache_write: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Output tokens per (bucket, model) — the stacked-chart series.
+    pub fn series_by_model(&self, hours: Option<i64>, bucket: Bucket) -> Result<Vec<ModelBucket>> {
+        let (clause, param) = Self::since_clause(hours);
+        let expr = bucket.sql_expr();
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {expr}, COALESCE(model, 'unknown'), SUM(tokens_out)
+             FROM events
+             WHERE granularity = 'turn' {clause}
+             GROUP BY 1, 2 ORDER BY 1"
+        ))?;
+        let rows = stmt.query_map(params![param], |r| {
+            Ok(ModelBucket {
+                bucket: r.get(0)?,
+                model: r.get(1)?,
+                tokens_out: r.get(2)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)

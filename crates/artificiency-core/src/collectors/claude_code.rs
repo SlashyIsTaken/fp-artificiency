@@ -74,19 +74,30 @@ pub fn ingest_file(store: &Store, path: &Path, report: &mut IngestReport) -> Res
             break; // partial line at EOF; picked up next pass
         }
         consumed += n as u64;
-        match parse_line(&String::from_utf8_lossy(&buf)) {
-            Some(turn) => {
-                store.upsert_session(
-                    &turn.session_id,
-                    PROVIDER,
-                    turn.cwd.as_deref(),
-                    Some(&turn.ts),
-                )?;
-                if store.insert_event(&turn.into_event())? {
-                    report.events_added += 1;
-                }
+        let parsed = parse_line(&String::from_utf8_lossy(&buf));
+        let empty = parsed.turn.is_none()
+            && parsed.tool_uses.is_empty()
+            && parsed.tool_results.is_empty();
+        if let Some(turn) = parsed.turn {
+            store.upsert_session(&turn.session_id, PROVIDER, turn.cwd.as_deref(), Some(&turn.ts))?;
+            if store.insert_event(&turn.into_event())? {
+                report.events_added += 1;
             }
-            None => report.lines_skipped += 1,
+        }
+        for tu in &parsed.tool_uses {
+            store.insert_tool_use(
+                &tu.session_id,
+                &tu.ts,
+                &tu.tool,
+                tu.target.as_deref(),
+                &format!("{PROVIDER}:{}", tu.id),
+            )?;
+        }
+        for tr in &parsed.tool_results {
+            store.set_tool_result_chars(&format!("{PROVIDER}:{}", tr.tool_use_id), tr.chars)?;
+        }
+        if empty {
+            report.lines_skipped += 1;
         }
     }
     store.set_file_offset(&key, consumed)?;
@@ -125,30 +136,125 @@ impl Turn {
     }
 }
 
-/// Extract a usage turn from one transcript line, or None for anything else
-/// (user prompts, housekeeping records, malformed JSON).
-pub fn parse_line(line: &str) -> Option<Turn> {
-    let v: Value = serde_json::from_str(line.trim()).ok()?;
-    if v.get("type")?.as_str()? != "assistant" {
-        return None;
+#[derive(Debug, Default)]
+pub struct Parsed {
+    pub turn: Option<Turn>,
+    pub tool_uses: Vec<ToolUse>,
+    pub tool_results: Vec<ToolResult>,
+}
+
+#[derive(Debug)]
+pub struct ToolUse {
+    pub id: String,
+    pub tool: String,
+    pub target: Option<String>,
+    pub session_id: String,
+    pub ts: String,
+}
+
+#[derive(Debug)]
+pub struct ToolResult {
+    pub tool_use_id: String,
+    pub chars: i64,
+}
+
+/// The tool-input field that best identifies what a call touched.
+const TARGET_KEYS: &[&str] = &["file_path", "path", "command", "url", "pattern", "query", "skill"];
+
+fn extract_target(input: &Value) -> Option<String> {
+    for key in TARGET_KEYS {
+        if let Some(s) = input.get(key).and_then(Value::as_str) {
+            // char-wise cap: byte-indexed truncate panics mid-codepoint
+            return Some(s.chars().take(160).collect());
+        }
     }
-    let usage = v.get("message")?.get("usage")?;
-    let int = |u: &Value, k: &str| u.get(k).and_then(Value::as_i64).unwrap_or(0);
-    Some(Turn {
-        session_id: v.get("sessionId")?.as_str()?.to_string(),
-        ts: v.get("timestamp")?.as_str()?.to_string(),
-        uuid: v.get("uuid")?.as_str()?.to_string(),
-        model: v
-            .pointer("/message/model")
-            .and_then(Value::as_str)
-            .map(String::from),
-        tokens_in: int(usage, "input_tokens"),
-        tokens_out: int(usage, "output_tokens"),
-        cache_read: int(usage, "cache_read_input_tokens"),
-        cache_write: int(usage, "cache_creation_input_tokens"),
-        is_sidechain: v.get("isSidechain").and_then(Value::as_bool).unwrap_or(false),
-        cwd: v.get("cwd").and_then(Value::as_str).map(String::from),
-    })
+    None
+}
+
+/// Extract everything of interest from one transcript line. Turns come from
+/// `assistant` records with usage (except `<synthetic>` — Claude Code's
+/// locally generated placeholders, not real model calls); tool uses from
+/// assistant content blocks; tool result sizes from `user` records.
+pub fn parse_line(line: &str) -> Parsed {
+    let mut out = Parsed::default();
+    let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
+        return out;
+    };
+    let (Some(kind), Some(session_id), Some(ts)) = (
+        v.get("type").and_then(Value::as_str),
+        v.get("sessionId").and_then(Value::as_str),
+        v.get("timestamp").and_then(Value::as_str),
+    ) else {
+        return out;
+    };
+    let content = v.pointer("/message/content").and_then(Value::as_array);
+
+    match kind {
+        "assistant" => {
+            let model = v.pointer("/message/model").and_then(Value::as_str);
+            if model != Some("<synthetic>") {
+                if let (Some(usage), Some(uuid)) = (
+                    v.pointer("/message/usage"),
+                    v.get("uuid").and_then(Value::as_str),
+                ) {
+                    let int = |k: &str| usage.get(k).and_then(Value::as_i64).unwrap_or(0);
+                    out.turn = Some(Turn {
+                        session_id: session_id.to_string(),
+                        ts: ts.to_string(),
+                        uuid: uuid.to_string(),
+                        model: model.map(String::from),
+                        tokens_in: int("input_tokens"),
+                        tokens_out: int("output_tokens"),
+                        cache_read: int("cache_read_input_tokens"),
+                        cache_write: int("cache_creation_input_tokens"),
+                        is_sidechain: v.get("isSidechain").and_then(Value::as_bool).unwrap_or(false),
+                        cwd: v.get("cwd").and_then(Value::as_str).map(String::from),
+                    });
+                }
+                for block in content.into_iter().flatten() {
+                    if block.get("type").and_then(Value::as_str) != Some("tool_use") {
+                        continue;
+                    }
+                    let (Some(id), Some(tool)) = (
+                        block.get("id").and_then(Value::as_str),
+                        block.get("name").and_then(Value::as_str),
+                    ) else {
+                        continue;
+                    };
+                    out.tool_uses.push(ToolUse {
+                        id: id.to_string(),
+                        tool: tool.to_string(),
+                        target: block.get("input").and_then(extract_target),
+                        session_id: session_id.to_string(),
+                        ts: ts.to_string(),
+                    });
+                }
+            }
+        }
+        "user" => {
+            for block in content.into_iter().flatten() {
+                if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+                    continue;
+                }
+                let Some(id) = block.get("tool_use_id").and_then(Value::as_str) else {
+                    continue;
+                };
+                let chars = block
+                    .get("content")
+                    .map(|c| match c.as_str() {
+                        Some(s) => s.len() as i64,
+                        None => c.to_string().len() as i64,
+                    })
+                    .unwrap_or(0);
+                out.tool_results.push(ToolResult {
+                    tool_use_id: id.to_string(),
+                    chars,
+                });
+            }
+        }
+        _ => {}
+    }
+    out
 }
 
 #[cfg(test)]
@@ -162,9 +268,13 @@ mod tests {
         r#"{"type":"user","uuid":"bbb-1","sessionId":"s-1","message":{"role":"user","content":"hi"}}"#;
     const HOUSEKEEPING_LINE: &str = r#"{"type":"file-history-snapshot","messageId":"m"}"#;
 
+    const TOOL_USE_LINE: &str = r#"{"type":"assistant","uuid":"ccc-1","sessionId":"s-1","timestamp":"2026-07-13T10:02:00.000Z","message":{"model":"claude-opus-4-8","role":"assistant","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"reading"},{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"/repo/main.rs"}}]}}"#;
+    const TOOL_RESULT_LINE: &str = r#"{"type":"user","uuid":"ddd-1","sessionId":"s-1","timestamp":"2026-07-13T10:02:01.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"0123456789"}]}}"#;
+    const SYNTHETIC_LINE: &str = r#"{"type":"assistant","uuid":"eee-1","sessionId":"s-1","timestamp":"2026-07-13T10:03:00.000Z","message":{"model":"<synthetic>","role":"assistant","usage":{"input_tokens":0,"output_tokens":0}}}"#;
+
     #[test]
     fn parses_assistant_usage() {
-        let t = parse_line(ASSISTANT_LINE).expect("assistant line should parse");
+        let t = parse_line(ASSISTANT_LINE).turn.expect("assistant line should parse");
         assert_eq!(t.session_id, "s-1");
         assert_eq!(t.tokens_in, 5733);
         assert_eq!(t.tokens_out, 475);
@@ -175,11 +285,56 @@ mod tests {
     }
 
     #[test]
-    fn skips_non_assistant_and_garbage() {
-        assert!(parse_line(USER_LINE).is_none());
-        assert!(parse_line(HOUSEKEEPING_LINE).is_none());
-        assert!(parse_line("not json at all").is_none());
-        assert!(parse_line("").is_none());
+    fn parses_tool_use_and_result() {
+        let p = parse_line(TOOL_USE_LINE);
+        assert!(p.turn.is_some()); // same record carries usage AND the tool call
+        assert_eq!(p.tool_uses.len(), 1);
+        assert_eq!(p.tool_uses[0].tool, "Read");
+        assert_eq!(p.tool_uses[0].target.as_deref(), Some("/repo/main.rs"));
+
+        let r = parse_line(TOOL_RESULT_LINE);
+        assert!(r.turn.is_none());
+        assert_eq!(r.tool_results.len(), 1);
+        assert_eq!(r.tool_results[0].chars, 10);
+    }
+
+    #[test]
+    fn skips_non_assistant_synthetic_and_garbage() {
+        let empty = |p: &Parsed| p.turn.is_none() && p.tool_uses.is_empty() && p.tool_results.is_empty();
+        assert!(empty(&parse_line(USER_LINE)));
+        assert!(empty(&parse_line(HOUSEKEEPING_LINE)));
+        assert!(empty(&parse_line(SYNTHETIC_LINE)));
+        assert!(empty(&parse_line("not json at all")));
+        assert!(empty(&parse_line("")));
+    }
+
+    #[test]
+    fn waste_queries_find_duplicate_reads() {
+        let store = Store::open_in_memory().unwrap();
+        // Same file read twice in one session, once in another.
+        for (sess, id, chars) in [("s-1", "t1", 1000), ("s-1", "t2", 1000), ("s-2", "t3", 500)] {
+            store
+                .insert_tool_use(sess, "2026-07-13T10:00:00Z", "Read", Some("/repo/a.rs"), id)
+                .unwrap();
+            store.set_tool_result_chars(id, chars).unwrap();
+        }
+        let dups = store.duplicate_reads(None, 10).unwrap();
+        assert_eq!(dups.len(), 1); // only s-1 has a duplicate
+        assert_eq!(dups[0].target, "/repo/a.rs");
+        assert_eq!(dups[0].reads, 2);
+        assert_eq!(dups[0].extra, 1);
+        assert_eq!(dups[0].wasted_chars, 1000);
+
+        let sum = store.waste_summary(None).unwrap();
+        assert_eq!(sum.tool_calls, 3);
+        assert_eq!(sum.extra_reads, 1);
+        assert_eq!(sum.wasted_chars, 1000);
+        assert_eq!(sum.biggest_chars, 1000);
+
+        let stats = store.tool_stats(None).unwrap();
+        assert_eq!(stats[0].tool, "Read");
+        assert_eq!(stats[0].calls, 3);
+        assert_eq!(stats[0].chars, 2500);
     }
 
     #[test]

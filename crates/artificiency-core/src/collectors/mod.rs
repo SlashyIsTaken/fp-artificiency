@@ -3,6 +3,7 @@
 //! injected into the tool (that's an *enricher*, see DESIGN.md).
 
 pub mod claude_code;
+pub mod limits;
 
 use serde::Serialize;
 

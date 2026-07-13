@@ -1,14 +1,26 @@
 <script lang="ts">
-  export interface Bar {
-    label: string; // full label for the tooltip (e.g. "2026-07-13")
-    tick?: string; // short axis tick; only some bars carry one
+  export interface Segment {
+    /// Index into the parent's series list; color = var(--series-{slot+1}).
+    slot: number;
+    name: string;
     value: number;
   }
 
-  let { bars, unit }: { bars: Bar[]; unit: string } = $props();
+  export interface Bar {
+    label: string; // full label for the tooltip (e.g. "2026-07-13")
+    tick?: string; // short axis tick; only some bars carry one
+    segments: Segment[]; // stacked bottom-up in the given order
+  }
+
+  export interface Series {
+    name: string;
+    slot: number;
+  }
+
+  let { bars, series, unit }: { bars: Bar[]; series: Series[]; unit: string } = $props();
 
   const W = 720;
-  const H = 180;
+  const H = 190;
   const PAD_L = 44;
   const PAD_B = 20;
   const PAD_T = 22; // headroom so the peak's direct label never clips
@@ -21,53 +33,86 @@
 
   let hovered = $state<number | null>(null);
 
-  const max = $derived(Math.max(1, ...bars.map((b) => b.value)));
-  const peak = $derived(bars.findIndex((b) => b.value === max && max > 0));
+  const total = (b: Bar) => b.segments.reduce((s, x) => s + x.value, 0);
+  const max = $derived(Math.max(1, ...bars.map(total)));
+  const peak = $derived(bars.findIndex((b) => total(b) === max && max > 0));
   const innerW = W - PAD_L - 6;
   const innerH = H - PAD_T - PAD_B;
-  const slot = $derived(innerW / Math.max(1, bars.length));
-  const barW = $derived(Math.max(2, slot - 2)); // 2px surface gap between bars
-  const x = (i: number) => PAD_L + i * slot + (slot - barW) / 2;
-  const y = (v: number) => PAD_T + innerH * (1 - v / max);
+  const base = PAD_T + innerH;
+  const slotW = $derived(innerW / Math.max(1, bars.length));
+  const barW = $derived(Math.max(2, slotW - 2)); // 2px surface gap between bars
+  const x = (i: number) => PAD_L + i * slotW + (slotW - barW) / 2;
   const h = (v: number) => (innerH * v) / max;
 
-  // Bar with rounded top corners, square base anchored to the baseline.
-  function barPath(i: number, v: number): string {
-    const bx = x(i);
-    const by = y(v);
-    const bh = h(v);
-    const r = Math.min(2, bh, barW / 2);
-    const base = PAD_T + innerH;
-    return `M${bx},${base} L${bx},${by + r} Q${bx},${by} ${bx + r},${by}
-            L${bx + barW - r},${by} Q${bx + barW},${by} ${bx + barW},${by + r}
-            L${bx + barW},${base} Z`;
+  // Rounded top corners for the topmost segment; square base at the baseline.
+  function topPath(bx: number, y: number, height: number): string {
+    const r = Math.min(2, height, barW / 2);
+    return `M${bx},${y + height} L${bx},${y + r} Q${bx},${y} ${bx + r},${y}
+            L${bx + barW - r},${y} Q${bx + barW},${y} ${bx + barW},${y + r}
+            L${bx + barW},${y + height} Z`;
   }
 
-  const gridLines = $derived([0.5, 1].map((f) => ({ v: max * f, gy: y(max * f) })));
+  // Stack geometry, bottom-up, with a 2px surface gap between segments
+  // (skipped for slivers that would disappear).
+  function stack(b: Bar, i: number) {
+    const out: { seg: Segment; y: number; height: number; top: boolean }[] = [];
+    let cum = 0;
+    const drawn = b.segments.filter((s) => s.value > 0);
+    drawn.forEach((seg, j) => {
+      const y0 = base - h(cum);
+      cum += seg.value;
+      const y1 = base - h(cum);
+      let y = y1;
+      let height = y0 - y1;
+      if (j > 0 && height > 3) {
+        height -= 2; // gap eats into this segment's bottom
+      }
+      out.push({ seg, y, height, top: j === drawn.length - 1 });
+    });
+    return out.map((s) => ({ ...s, bx: x(i) }));
+  }
+
+  const gridLines = $derived(
+    [0.5, 1].map((f) => ({ v: max * f, gy: base - h(max * f) })),
+  );
 </script>
 
 <div class="chart">
-  <svg viewBox="0 0 {W} {H}" role="img" aria-label="Bar chart, {unit} per day">
+  <svg viewBox="0 0 {W} {H}" role="img" aria-label="Stacked bar chart, {unit}">
     {#each gridLines as g}
       <line x1={PAD_L} x2={W - 6} y1={g.gy} y2={g.gy} class="grid" />
       <text x={PAD_L - 6} y={g.gy + 3.5} class="axis" text-anchor="end">
         {compact.format(g.v)}
       </text>
     {/each}
-    <line x1={PAD_L} x2={W - 6} y1={PAD_T + innerH} y2={PAD_T + innerH} class="baseline" />
+    <line x1={PAD_L} x2={W - 6} y1={base} y2={base} class="baseline" />
 
     {#each bars as b, i}
-      {#if b.value > 0}
-        <path d={barPath(i, b.value)} class="bar" class:dim={hovered !== null && hovered !== i} />
-      {/if}
+      {#each stack(b, i) as s}
+        {#if s.top}
+          <path
+            d={topPath(s.bx, s.y, s.height)}
+            style="fill: var(--series-{s.seg.slot + 1})"
+            class:dim={hovered !== null && hovered !== i}
+          />
+        {:else}
+          <rect
+            x={s.bx}
+            y={s.y}
+            width={barW}
+            height={s.height}
+            style="fill: var(--series-{s.seg.slot + 1})"
+            class:dim={hovered !== null && hovered !== i}
+          />
+        {/if}
+      {/each}
       {#if b.tick}
         <text x={x(i) + barW / 2} y={H - 5} class="axis" text-anchor="middle">{b.tick}</text>
       {/if}
-      <!-- full-height hit target, wider than the mark -->
       <rect
-        x={PAD_L + i * slot}
+        x={PAD_L + i * slotW}
         y={PAD_T}
-        width={slot}
+        width={slotW}
         height={innerH}
         fill="transparent"
         role="presentation"
@@ -75,20 +120,38 @@
         onmouseleave={() => (hovered = null)}
       />
       {#if i === peak && hovered === null}
-        <text x={x(i) + barW / 2} y={y(b.value) - 4} class="peak" text-anchor="middle">
-          {compact.format(b.value)}
+        <text x={x(i) + barW / 2} y={base - h(total(b)) - 4} class="peak" text-anchor="middle">
+          {compact.format(total(b))}
         </text>
       {/if}
     {/each}
   </svg>
 
+  {#if series.length > 1}
+    <div class="legend">
+      {#each series as s}
+        <span class="key">
+          <span class="chip" style="background: var(--series-{s.slot + 1})"></span>{s.name}
+        </span>
+      {/each}
+    </div>
+  {/if}
+
   {#if hovered !== null && bars[hovered]}
-    <div
-      class="tooltip"
-      style="left: {((x(hovered) + barW / 2) / W) * 100}%; top: 0;"
-    >
-      <span class="tt-label">{bars[hovered].label}</span>
-      <span class="tt-value">{full.format(bars[hovered].value)} {unit}</span>
+    {@const b = bars[hovered]}
+    <div class="tooltip" style="left: {((x(hovered) + barW / 2) / W) * 100}%; top: 0;">
+      <div class="tt-label">{b.label}</div>
+      {#each b.segments.filter((s) => s.value > 0) as s}
+        <div class="tt-row">
+          <span class="chip" style="background: var(--series-{s.slot + 1})"></span>
+          <span>{s.name}</span>
+          <span class="tt-value">{full.format(s.value)}</span>
+        </div>
+      {/each}
+      <div class="tt-row tt-total">
+        <span>total</span>
+        <span class="tt-value">{full.format(total(b))} {unit}</span>
+      </div>
     </div>
   {/if}
 </div>
@@ -102,10 +165,7 @@
     height: auto;
     display: block;
   }
-  .bar {
-    fill: var(--accent);
-  }
-  .bar.dim {
+  .dim {
     opacity: 0.45;
   }
   .grid {
@@ -126,25 +186,61 @@
     font-size: 10px;
     fill: var(--text-secondary);
   }
+  .legend {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-top: 0.4rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+  }
+  .key {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  .chip {
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    display: inline-block;
+    flex-shrink: 0;
+  }
   .tooltip {
     position: absolute;
     transform: translateX(-50%);
     background: var(--surface-raised);
     border: 1px solid var(--border);
     border-radius: 6px;
-    padding: 0.3rem 0.55rem;
+    padding: 0.4rem 0.6rem;
     font-size: 0.75rem;
     pointer-events: none;
     white-space: nowrap;
-    display: flex;
-    gap: 0.5rem;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    min-width: 150px;
   }
   .tt-label {
     color: var(--text-secondary);
+    margin-bottom: 0.25rem;
+  }
+  .tt-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    justify-content: space-between;
+  }
+  .tt-row span:nth-child(2) {
+    margin-right: auto;
   }
   .tt-value {
     color: var(--text-primary);
     font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .tt-total {
+    border-top: 1px solid var(--border);
+    margin-top: 0.25rem;
+    padding-top: 0.25rem;
+    color: var(--text-secondary);
   }
 </style>

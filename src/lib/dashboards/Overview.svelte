@@ -1,22 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getOverview, runBackfill, getSeries, getByModel, inTauri } from "../api";
-  import type { Overview, IngestReport, UsageBucket, ModelUsage } from "../api";
+  import { getOverview, runBackfill, getSeriesByModel, getByModel, inTauri } from "../api";
+  import type { Overview, IngestReport, ModelBucket, ModelUsage } from "../api";
   import StatTile from "../components/StatTile.svelte";
   import GhostPanel from "../components/GhostPanel.svelte";
   import BarChart from "../components/BarChart.svelte";
-  import type { Bar } from "../components/BarChart.svelte";
+  import type { Bar, Series } from "../components/BarChart.svelte";
   import RangeSelector from "../components/RangeSelector.svelte";
   import type { RangePreset } from "../components/RangeSelector.svelte";
-
-  const PRESETS: RangePreset[] = [
-    { label: "1h", hours: 1, bucket: "minute" },
-    { label: "24h", hours: 24, bucket: "hour" },
-    { label: "7d", hours: 24 * 7, bucket: "day" },
-    { label: "30d", hours: 24 * 30, bucket: "day" },
-    { label: "3mo", hours: 24 * 91, bucket: "day" },
-    { label: "All", hours: 0, bucket: "day" },
-  ];
+  import { PRESETS, DEFAULT_PRESET } from "../presets";
 
   const TIPS: Record<string, string> = {
     Sessions:
@@ -33,11 +25,25 @@
       "Tokens written into the prompt cache at a small premium so that later turns can read them back cheaply.",
   };
 
-  let range = $state<RangePreset>(PRESETS[3]); // default 30d
+  let range = $state<RangePreset>(DEFAULT_PRESET);
   let overview = $state<Overview | null>(null);
   let ingest = $state<IngestReport | null>(null);
   let models = $state<ModelUsage[]>([]);
   let bars = $state<Bar[]>([]);
+  let seriesDef = $state<Series[]>([]);
+  // Color follows the entity: slots come from the all-time output ranking,
+  // assigned once — switching ranges must never repaint a model.
+  let modelSlot = new Map<string, number>();
+
+  async function initSeries() {
+    const all = await getByModel(0);
+    const top = all.slice(0, 3);
+    modelSlot = new Map(top.map((m, i) => [m.model, i]));
+    seriesDef = top.map((m, i) => ({ name: m.model, slot: i }));
+    if (all.length > 3) {
+      seriesDef = [...seriesDef, { name: "Other", slot: 3 }];
+    }
+  }
   let status = $state<"loading" | "ready" | "error" | "browser">("loading");
   let errorMsg = $state("");
 
@@ -59,8 +65,15 @@
   }
 
   // The store omits empty buckets; rebuild the full expected axis.
-  function fillBuckets(rows: UsageBucket[], preset: RangePreset, firstTs: string | null): Bar[] {
-    const byKey = new Map(rows.map((r) => [r.bucket, r.tokens_out]));
+  function fillBuckets(rows: ModelBucket[], preset: RangePreset, firstTs: string | null): Bar[] {
+    // bucket key → slot → tokens_out
+    const byKey = new Map<string, Map<number, number>>();
+    for (const r of rows) {
+      const slot = modelSlot.get(r.model) ?? 3; // unmapped models fold into Other
+      const m = byKey.get(r.bucket) ?? new Map<number, number>();
+      m.set(slot, (m.get(slot) ?? 0) + r.tokens_out);
+      byKey.set(r.bucket, m);
+    }
     const stepMs = preset.bucket === "minute" ? 60_000 : preset.bucket === "hour" ? 3_600_000 : 86_400_000;
     const now = new Date();
     let start: Date;
@@ -72,7 +85,15 @@
     const out: Bar[] = [];
     for (let t = start.getTime(); t <= now.getTime(); t += stepMs) {
       const key = keyOf(new Date(t), preset.bucket);
-      out.push({ label: key.replace("T", " "), value: byKey.get(key) ?? 0 });
+      const m = byKey.get(key);
+      out.push({
+        label: key.replace("T", " "),
+        segments: seriesDef.map((s) => ({
+          slot: s.slot,
+          name: s.name,
+          value: m?.get(s.slot) ?? 0,
+        })),
+      });
     }
     // Sparse ticks: ~6 across, last bucket labeled unless a regular tick crowds it.
     const step = Math.max(1, Math.ceil(out.length / 6));
@@ -88,7 +109,7 @@
 
   async function load() {
     overview = await getOverview(range.hours);
-    bars = fillBuckets(await getSeries(range.hours, range.bucket), range, overview.first_ts);
+    bars = fillBuckets(await getSeriesByModel(range.hours, range.bucket), range, overview.first_ts);
     models = await getByModel(range.hours);
   }
 
@@ -109,6 +130,7 @@
     }
     try {
       ingest = await runBackfill();
+      await initSeries();
       await load();
       status = "ready";
     } catch (e) {
@@ -152,8 +174,8 @@
   </section>
 
   <section class="panel">
-    <h2>Output tokens per {bucketName} <span class="sub">{range.label === "All" ? "all time" : `last ${range.label}`}</span></h2>
-    <BarChart {bars} unit="output tokens" />
+    <h2>Output tokens per {bucketName} <span class="sub">{range.label === "All" ? "all time" : `last ${range.label}`} · by model</span></h2>
+    <BarChart {bars} series={seriesDef} unit="output tokens" />
   </section>
 
   {#if models.length > 0}
@@ -193,11 +215,6 @@
       title="Plugin impact"
       question="Which plugin or config change actually saved you tokens?"
       action="Requires enrichment — coming soon"
-    />
-    <GhostPanel
-      title="Waste diagnosis"
-      question="Duplicate file reads, oversized tool outputs, cache churn — where is the leak?"
-      action="Coming soon"
     />
     <GhostPanel
       title="Config integrity"

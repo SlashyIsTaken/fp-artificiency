@@ -1,5 +1,8 @@
+use artificiency_core::collectors::limits::{self, UsageLimit};
 use artificiency_core::collectors::{claude_code, IngestReport};
-use artificiency_core::store::{Bucket, ModelUsage, UsageBucket};
+use artificiency_core::store::{
+    BigResult, Bucket, DupRead, ModelBucket, ModelUsage, ToolStat, UsageBucket, WasteSummary,
+};
 use artificiency_core::{Overview, Store};
 
 // SQLite opens are cheap; opening per command keeps startup infallible
@@ -23,13 +26,8 @@ fn overview(hours: i64) -> Result<Overview, String> {
 
 #[tauri::command]
 fn series(hours: i64, bucket: String) -> Result<Vec<UsageBucket>, String> {
-    let bucket = match bucket.as_str() {
-        "minute" => Bucket::Minute,
-        "hour" => Bucket::Hour,
-        _ => Bucket::Day,
-    };
     open_store()?
-        .series(range(hours), bucket)
+        .series(range(hours), parse_bucket(&bucket))
         .map_err(|e| e.to_string())
 }
 
@@ -37,6 +35,59 @@ fn series(hours: i64, bucket: String) -> Result<Vec<UsageBucket>, String> {
 fn by_model(hours: i64) -> Result<Vec<ModelUsage>, String> {
     open_store()?
         .by_model(range(hours))
+        .map_err(|e| e.to_string())
+}
+
+fn parse_bucket(bucket: &str) -> Bucket {
+    match bucket {
+        "minute" => Bucket::Minute,
+        "hour" => Bucket::Hour,
+        _ => Bucket::Day,
+    }
+}
+
+#[tauri::command]
+fn series_by_model(hours: i64, bucket: String) -> Result<Vec<ModelBucket>, String> {
+    open_store()?
+        .series_by_model(range(hours), parse_bucket(&bucket))
+        .map_err(|e| e.to_string())
+}
+
+/// Subscription limits; None hides the widget (no subscription / no creds).
+/// Network call — async so the UI thread never blocks on it.
+#[tauri::command]
+async fn usage_limits() -> Option<Vec<UsageLimit>> {
+    tauri::async_runtime::spawn_blocking(limits::usage_limits)
+        .await
+        .ok()
+        .flatten()
+}
+
+#[tauri::command]
+fn waste_summary(hours: i64) -> Result<WasteSummary, String> {
+    open_store()?
+        .waste_summary(range(hours))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn duplicate_reads(hours: i64) -> Result<Vec<DupRead>, String> {
+    open_store()?
+        .duplicate_reads(range(hours), 15)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn largest_results(hours: i64) -> Result<Vec<BigResult>, String> {
+    open_store()?
+        .largest_results(range(hours), 10)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn tool_stats(hours: i64) -> Result<Vec<ToolStat>, String> {
+    open_store()?
+        .tool_stats(range(hours))
         .map_err(|e| e.to_string())
 }
 
@@ -54,7 +105,18 @@ fn backfill() -> Result<IngestReport, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![overview, backfill, series, by_model])
+        .invoke_handler(tauri::generate_handler![
+            overview,
+            backfill,
+            series,
+            series_by_model,
+            by_model,
+            usage_limits,
+            waste_summary,
+            duplicate_reads,
+            largest_results,
+            tool_stats
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -49,6 +49,16 @@ fn access_token() -> Option<String> {
         .map(String::from)
 }
 
+/// The account's subscription plan (e.g. "pro", "max"), or `None` for API-key
+/// accounts. Tells the UI whether cost figures are a reference (subscription)
+/// or the user's actual pay-as-you-go spend.
+pub fn subscription_type() -> Option<String> {
+    let raw = std::fs::read_to_string(credentials_path()?).ok()?;
+    let v: Value = serde_json::from_str(&raw).ok()?;
+    let t = v.pointer("/claudeAiOauth/subscriptionType")?.as_str()?;
+    (!t.is_empty()).then(|| t.to_string())
+}
+
 /// Fetch current usage limits. `None` (never an error) when there are no
 /// credentials, no subscription, or any fetch problem — fail open by contract.
 pub fn usage_limits() -> Option<Vec<UsageLimit>> {

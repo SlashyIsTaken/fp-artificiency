@@ -86,6 +86,13 @@ async fn usage_limits() -> Option<Vec<UsageLimit>> {
     }
 }
 
+/// Subscription plan (e.g. "pro"), or None for API-key accounts. Drives the
+/// "Spend is an API-rate reference, not your bill" note.
+#[tauri::command]
+fn subscription() -> Option<String> {
+    limits::subscription_type()
+}
+
 #[tauri::command]
 fn waste_summary(hours: i64) -> Result<WasteSummary, String> {
     open_store()?
@@ -167,6 +174,7 @@ pub fn run() {
             series_sessions,
             by_model,
             usage_limits,
+            subscription,
             waste_summary,
             duplicate_reads,
             largest_results,

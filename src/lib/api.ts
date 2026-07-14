@@ -146,6 +146,7 @@ export const getSeriesByModel = (hours: number, bucket: string) =>
 export const getSeriesSessions = (hours: number, bucket: string) =>
   invoke<SessionBucket[]>("series_sessions", { hours, bucket });
 export const getUsageLimits = () => invoke<UsageLimit[] | null>("usage_limits");
+export const getSubscription = () => invoke<string | null>("subscription");
 export const getConfigIntegrity = () => invoke<ConfigFile[]>("config_integrity");
 export const reviewConfig = (path: string) => invoke<void>("review_config", { path });
 export const getPluginEvents = () => invoke<PluginEvent[]>("plugin_events");

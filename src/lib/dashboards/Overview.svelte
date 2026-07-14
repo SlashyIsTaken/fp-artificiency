@@ -6,6 +6,7 @@
     getSeriesByModel,
     getSeriesSessions,
     getByModel,
+    getSubscription,
     inTauri,
   } from "../api";
   import type { Overview, IngestReport, ModelBucket, SessionBucket, ModelUsage } from "../api";
@@ -18,7 +19,7 @@
 
   const TIPS: Record<string, string> = {
     Spend:
-      "Estimated cost of this range, priced per model from each provider's published rates (input, output, and cache read/write). An estimate we compute locally, not a bill. Models we don't have a price for count as $0.",
+      "Estimated cost of this range at each provider's pay-as-you-go API token rates (input, output, and cache read/write). If you are on a subscription, this is what the usage would cost on the API, not what you paid. Computed locally. Models we don't price count as $0.",
     Sessions:
       "One Claude Code conversation, from open to close. Reopening a project or /clear starts a new session.",
     Turns:
@@ -65,6 +66,7 @@
   let range = $state<RangePreset>(DEFAULT_PRESET);
   let overview = $state<Overview | null>(null);
   let ingest = $state<IngestReport | null>(null);
+  let subscription = $state<string | null>(null);
   let models = $state<ModelUsage[]>([]);
   let modelRows = $state<ModelBucket[]>([]);
   let sessionRows = $state<SessionBucket[]>([]);
@@ -220,6 +222,7 @@
         ingest = await runBackfill();
         await initSeries();
         await load();
+        subscription = await getSubscription().catch(() => null);
         status = "ready";
       } catch (e) {
         errorMsg = String(e);
@@ -261,7 +264,7 @@
   <p class="note error">Collector error: {errorMsg}</p>
 {:else if overview}
   <section class="tiles">
-    <StatTile label="Spend" num={overview.cost} format={money} hint="estimated" tip={TIPS["Spend"]}
+    <StatTile label="Spend" num={overview.cost} format={money} hint="at API rates" tip={TIPS["Spend"]}
       onselect={() => (metric = "spend")} active={metric === "spend"} />
     <StatTile label="Sessions" num={overview.sessions} format={fmt} tip={TIPS["Sessions"]}
       onselect={() => (metric = "sessions")} active={metric === "sessions"} />
@@ -276,6 +279,13 @@
     <StatTile label="Cache writes" num={overview.cache_write} format={fmt} hint="tokens written to cache" tip={TIPS["Cache writes"]}
       onselect={() => (metric = "cache_write")} active={metric === "cache_write"} />
   </section>
+
+  {#if subscription}
+    <p class="api-note">
+      You are on a Claude subscription ({subscription}), so Spend is what this usage would cost
+      on the pay-as-you-go API, not what you paid.
+    </p>
+  {/if}
 
   <section class="panel">
     <h2>
@@ -432,6 +442,12 @@
   tfoot td.model {
     font-family: inherit;
     color: var(--text-secondary);
+  }
+  .api-note {
+    margin-top: 0.7rem;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    max-width: 70ch;
   }
   .note {
     color: var(--text-secondary);

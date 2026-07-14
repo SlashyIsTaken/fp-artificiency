@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { fly } from "svelte/transition";
+  import { cubicOut } from "svelte/easing";
+
   export interface Segment {
     /// Index into the parent's series list; color = var(--series-{slot+1}).
     slot: number;
@@ -17,7 +20,21 @@
     slot: number;
   }
 
-  let { bars, series, unit }: { bars: Bar[]; series: Series[]; unit: string } = $props();
+  let {
+    bars,
+    series,
+    unit,
+    money = false,
+    animate,
+  }: {
+    bars: Bar[];
+    series: Series[];
+    unit: string;
+    money?: boolean;
+    // Changing this token replays the grow-in transition — the parent passes
+    // the active metric, so swapping data source animates the bars.
+    animate?: string;
+  } = $props();
 
   const W = 720;
   const H = 190;
@@ -25,11 +42,23 @@
   const PAD_B = 20;
   const PAD_T = 22; // headroom so the peak's direct label never clips
 
-  const compact = new Intl.NumberFormat("en", {
+  // Money metrics (spend) format as compact/full USD; everything else as plain
+  // numbers. Axis + peak use the compact form; the tooltip uses the full form.
+  const numCompact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+  const usdCompact = new Intl.NumberFormat("en", {
+    style: "currency",
+    currency: "USD",
     notation: "compact",
     maximumFractionDigits: 1,
   });
-  const full = new Intl.NumberFormat("en");
+  const usdFull = new Intl.NumberFormat("en", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  });
+  const numFull = new Intl.NumberFormat("en");
+  const compact = $derived(money ? usdCompact : numCompact);
+  const full = $derived(money ? usdFull : numFull);
 
   let hovered = $state<number | null>(null);
 
@@ -78,7 +107,13 @@
 </script>
 
 <div class="chart">
-  <svg viewBox="0 0 {W} {H}" role="img" aria-label="Stacked bar chart, {unit}">
+  {#key animate}
+  <svg
+    viewBox="0 0 {W} {H}"
+    role="img"
+    aria-label="Stacked bar chart, {unit}"
+    in:fly={{ y: 12, duration: 320, easing: cubicOut }}
+  >
     {#each gridLines as g}
       <line x1={PAD_L} x2={W - 6} y1={g.gy} y2={g.gy} class="grid" />
       <text x={PAD_L - 6} y={g.gy + 3.5} class="axis" text-anchor="end">
@@ -126,6 +161,7 @@
       {/if}
     {/each}
   </svg>
+  {/key}
 
   {#if series.length > 1}
     <div class="legend">
@@ -150,7 +186,7 @@
       {/each}
       <div class="tt-row tt-total">
         <span>total</span>
-        <span class="tt-value">{full.format(total(b))} {unit}</span>
+        <span class="tt-value">{full.format(total(b))}{money ? "" : ` ${unit}`}</span>
       </div>
     </div>
   {/if}

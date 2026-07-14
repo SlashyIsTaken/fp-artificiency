@@ -18,5 +18,15 @@ const compact = new Intl.NumberFormat("en", {
 
 export const fmt = (n: number) => compact.format(n);
 
+// Cost is an owned estimate, not a bill (see pricing.rs). Sub-cent spend still
+// reads as "$0.00" rather than "$0" so a priced-but-tiny range looks priced;
+// larger figures round to cents.
+const usd = new Intl.NumberFormat("en", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 2,
+});
+export const money = (n: number) => usd.format(n);
+
 /// Tool-result sizes are measured in characters; ~4 chars ≈ 1 token.
 export const estTokens = (chars: number) => Math.round(chars / 4);

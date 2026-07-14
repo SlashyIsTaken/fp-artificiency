@@ -8,9 +8,26 @@
   } from "../api";
   import type { WasteSummary, DupRead, BigResult, ToolStat } from "../api";
   import StatTile from "../components/StatTile.svelte";
+  import InfoTip from "../components/InfoTip.svelte";
   import RangeSelector from "../components/RangeSelector.svelte";
   import type { RangePreset } from "../components/RangeSelector.svelte";
   import { PRESETS, DEFAULT_PRESET, fmt, estTokens } from "../presets";
+
+  // Actionable prevention advice per panel — the "how do I fix this" the raw
+  // numbers don't give you.
+  const TIPS = {
+    dups:
+      "Repeated reads of the same file in one session usually mean its content was dropped from context. Prevent it by avoiding /clear mid-task, making targeted edits instead of re-reading whole files, and keeping related work in one session rather than restarting.",
+    biggest:
+      "One oversized tool result can dominate a session's input cost. Prevent it by reading specific line ranges instead of whole files, filtering long command output through head/grep/tail, and not dumping large logs or generated files into context.",
+    tools:
+      "Tools that return the most text drive the most input cost. If one tool's volume is high, narrow its scope: more specific search patterns, smaller read ranges, or summarizing output before it re-enters context.",
+  };
+
+  const TOP = 5;
+  let showAllDups = $state(false);
+  let showAllBiggest = $state(false);
+  let showAllTools = $state(false);
 
   let range = $state<RangePreset>(DEFAULT_PRESET);
   let summary = $state<WasteSummary | null>(null);
@@ -31,6 +48,7 @@
   };
 
   async function load() {
+    showAllDups = showAllBiggest = showAllTools = false;
     try {
       summary = await getWasteSummary(range.hours);
       dups = await getDuplicateReads(range.hours);
@@ -60,13 +78,13 @@
     <StatTile
       label="Tool calls"
       value={fmt(summary.tool_calls)}
-      tip="Every tool invocation (file reads, shell commands, searches …) in the range. Each result is sent back into the model's context — tool output is input you pay for."
+      tip="Every tool invocation (file reads, shell commands, searches …) in the range. Each result is sent back into the model's context. Tool output is input you pay for."
     />
     <StatTile
       label="Redundant re-reads"
       value={fmt(summary.extra_reads)}
       hint="same file, same session"
-      tip="Times a file was read again in the same session. The model usually already had the content in context — the repeat is mostly waste."
+      tip="Times a file was read again in the same session. The model usually already had the content in context, so the repeat is mostly waste."
     />
     <StatTile
       label="Re-read volume"
@@ -83,7 +101,7 @@
 
   {#if dups.length > 0}
     <section class="panel">
-      <h2>Most re-read files</h2>
+      <h2><InfoTip text="Most re-read files" tip={TIPS.dups} /></h2>
       <div class="table-wrap">
         <table>
           <thead>
@@ -96,7 +114,7 @@
             </tr>
           </thead>
           <tbody>
-            {#each dups as d}
+            {#each showAllDups ? dups : dups.slice(0, TOP) as d}
               <tr>
                 <td class="target" title={d.target}>{shorten(d.target)}</td>
                 <td>{fmt(d.reads)}</td>
@@ -105,6 +123,15 @@
                 <td>{vol(d.wasted_chars)}</td>
               </tr>
             {/each}
+            {#if dups.length > TOP}
+              <tr class="more">
+                <td colspan="5">
+                  <button onclick={() => (showAllDups = !showAllDups)}>
+                    {showAllDups ? "Show top 5" : `View all ${dups.length}`}
+                  </button>
+                </td>
+              </tr>
+            {/if}
           </tbody>
         </table>
       </div>
@@ -115,7 +142,7 @@
 
   {#if biggest.length > 0}
     <section class="panel">
-      <h2>Largest tool outputs</h2>
+      <h2><InfoTip text="Largest tool outputs" tip={TIPS.biggest} /></h2>
       <div class="table-wrap">
         <table>
           <thead>
@@ -127,7 +154,7 @@
             </tr>
           </thead>
           <tbody>
-            {#each biggest as b}
+            {#each showAllBiggest ? biggest : biggest.slice(0, TOP) as b}
               <tr>
                 <td class="mono">{b.tool}</td>
                 <td class="target" title={b.target}>{shorten(b.target)}</td>
@@ -135,6 +162,15 @@
                 <td class="mono">{when(b.ts)}</td>
               </tr>
             {/each}
+            {#if biggest.length > TOP}
+              <tr class="more">
+                <td colspan="4">
+                  <button onclick={() => (showAllBiggest = !showAllBiggest)}>
+                    {showAllBiggest ? "Show top 5" : `View all ${biggest.length}`}
+                  </button>
+                </td>
+              </tr>
+            {/if}
           </tbody>
         </table>
       </div>
@@ -143,7 +179,7 @@
 
   {#if tools.length > 0}
     <section class="panel">
-      <h2>Output volume by tool</h2>
+      <h2><InfoTip text="Output volume by tool" tip={TIPS.tools} /></h2>
       <div class="table-wrap">
         <table>
           <thead>
@@ -154,13 +190,22 @@
             </tr>
           </thead>
           <tbody>
-            {#each tools as t}
+            {#each showAllTools ? tools : tools.slice(0, TOP) as t}
               <tr>
                 <td class="mono">{t.tool}</td>
                 <td>{fmt(t.calls)}</td>
                 <td>{vol(t.chars)}</td>
               </tr>
             {/each}
+            {#if tools.length > TOP}
+              <tr class="more">
+                <td colspan="3">
+                  <button onclick={() => (showAllTools = !showAllTools)}>
+                    {showAllTools ? "Show top 5" : `View all ${tools.length}`}
+                  </button>
+                </td>
+              </tr>
+            {/if}
           </tbody>
         </table>
       </div>
@@ -248,5 +293,22 @@
   }
   .error {
     color: #d03b3b;
+  }
+  td[colspan] {
+    text-align: left;
+    padding-top: 0.5rem;
+  }
+  .more button {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .more button:hover {
+    color: var(--text-primary, inherit);
+    text-decoration: underline;
   }
 </style>

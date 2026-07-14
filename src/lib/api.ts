@@ -10,6 +10,7 @@ export interface Overview {
   first_ts: string | null;
   last_ts: string | null;
   db_path: string | null;
+  cost: number;
 }
 
 export interface IngestReport {
@@ -35,6 +36,7 @@ export interface ModelUsage {
   tokens_out: number;
   cache_read: number;
   cache_write: number;
+  cost: number;
 }
 
 export interface WasteSummary {
@@ -68,7 +70,17 @@ export interface ToolStat {
 export interface ModelBucket {
   bucket: string;
   model: string;
+  turns: number;
+  tokens_in: number;
   tokens_out: number;
+  cache_read: number;
+  cache_write: number;
+  cost: number;
+}
+
+export interface SessionBucket {
+  bucket: string;
+  sessions: number;
 }
 
 export interface UsageLimit {
@@ -95,4 +107,6 @@ export const getLargestResults = (hours: number) => invoke<BigResult[]>("largest
 export const getToolStats = (hours: number) => invoke<ToolStat[]>("tool_stats", { hours });
 export const getSeriesByModel = (hours: number, bucket: string) =>
   invoke<ModelBucket[]>("series_by_model", { hours, bucket });
+export const getSeriesSessions = (hours: number, bucket: string) =>
+  invoke<SessionBucket[]>("series_sessions", { hours, bucket });
 export const getUsageLimits = () => invoke<UsageLimit[] | null>("usage_limits");

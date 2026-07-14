@@ -34,6 +34,11 @@
     flex: 1;
     min-width: 0;
     padding: 1.5rem;
-    max-width: 1080px;
+    /* Cap the content width so lines/tiles don't stretch absurdly on very wide
+       displays, but keep it wide enough that the stat tiles can collapse to a
+       single row; center the leftover space so ultrawide screens stay balanced
+       rather than piling emptiness on the right. */
+    max-width: 1600px;
+    margin-inline: auto;
   }
 </style>

@@ -14,4 +14,5 @@ fn main() {
     let report = claude_code::backfill(&store, &dir).expect("backfill");
     println!("{report:#?}");
     println!("{:#?}", store.overview(None).expect("overview"));
+    println!("{:#?}", store.by_model(None).expect("by_model"));
 }

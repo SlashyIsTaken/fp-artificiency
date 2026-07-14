@@ -1,47 +1,87 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getOverview, runBackfill, getSeriesByModel, getByModel, inTauri } from "../api";
-  import type { Overview, IngestReport, ModelBucket, ModelUsage } from "../api";
+  import {
+    getOverview,
+    runBackfill,
+    getSeriesByModel,
+    getSeriesSessions,
+    getByModel,
+    inTauri,
+  } from "../api";
+  import type { Overview, IngestReport, ModelBucket, SessionBucket, ModelUsage } from "../api";
   import StatTile from "../components/StatTile.svelte";
   import GhostPanel from "../components/GhostPanel.svelte";
   import BarChart from "../components/BarChart.svelte";
   import type { Bar, Series } from "../components/BarChart.svelte";
   import RangeSelector from "../components/RangeSelector.svelte";
   import type { RangePreset } from "../components/RangeSelector.svelte";
-  import { PRESETS, DEFAULT_PRESET } from "../presets";
+  import { PRESETS, DEFAULT_PRESET, money } from "../presets";
 
   const TIPS: Record<string, string> = {
+    Spend:
+      "Estimated cost of this range, priced per model from each provider's published rates (input, output, and cache read/write). An estimate we compute locally, not a bill. Models we don't have a price for count as $0.",
     Sessions:
       "One Claude Code conversation, from open to close. Reopening a project or /clear starts a new session.",
     Turns:
-      "One assistant reply within a session. Each turn reports its own token usage — turns are the atoms of this dashboard.",
+      "One assistant reply within a session. Each turn reports its own token usage. Turns are the atoms of this dashboard.",
     "Input tokens":
       "Fresh (uncached) prompt tokens sent to the model, billed at the full input rate. Most prompt volume is usually served from cache instead.",
     "Output tokens":
       "Tokens the model generated: prose, code, and tool calls. Usually the most expensive per token.",
     "Cache reads":
-      "Prompt tokens served from the provider's prompt cache instead of being resent — far cheaper than fresh input. High is good.",
+      "Prompt tokens served from the provider's prompt cache instead of being resent, far cheaper than fresh input. High is good.",
     "Cache writes":
       "Tokens written into the prompt cache at a small premium so that later turns can read them back cheaply.",
   };
 
+  // Which metric the trend chart shows. Every stat tile is a selector for one
+  // of these: clicking a tile drills its total into a per-bucket time series.
+  type MetricKey =
+    | "spend"
+    | "sessions"
+    | "turns"
+    | "input"
+    | "output"
+    | "cache_read"
+    | "cache_write";
+  interface MetricDef {
+    label: string;
+    unit: string;
+    money?: boolean;
+    // Stacked metrics extract a value from each per-model bucket row; Sessions
+    // has no field and renders as a single (non-model-attributable) series.
+    field?: (r: ModelBucket) => number;
+  }
+  const METRICS: Record<MetricKey, MetricDef> = {
+    spend: { label: "Spend", unit: "USD", money: true, field: (r) => r.cost },
+    sessions: { label: "Sessions", unit: "sessions" },
+    turns: { label: "Turns", unit: "turns", field: (r) => r.turns },
+    input: { label: "Input tokens", unit: "input tokens", field: (r) => r.tokens_in },
+    output: { label: "Output tokens", unit: "output tokens", field: (r) => r.tokens_out },
+    cache_read: { label: "Cache reads", unit: "cache-read tokens", field: (r) => r.cache_read },
+    cache_write: { label: "Cache writes", unit: "cache-write tokens", field: (r) => r.cache_write },
+  };
+
+  let metric = $state<MetricKey>("output");
   let range = $state<RangePreset>(DEFAULT_PRESET);
   let overview = $state<Overview | null>(null);
   let ingest = $state<IngestReport | null>(null);
   let models = $state<ModelUsage[]>([]);
-  let bars = $state<Bar[]>([]);
-  let seriesDef = $state<Series[]>([]);
-  // Color follows the entity: slots come from the all-time output ranking,
-  // assigned once — switching ranges must never repaint a model.
+  let modelRows = $state<ModelBucket[]>([]);
+  let sessionRows = $state<SessionBucket[]>([]);
+  // Per-model series for stacked metrics. Colors are fixed from the all-time
+  // output ranking, assigned once, so switching range or metric never repaints
+  // a model.
+  let modelSeries = $state<Series[]>([]);
   let modelSlot = new Map<string, number>();
 
   async function initSeries() {
     const all = await getByModel(0);
     const top = all.slice(0, 3);
     modelSlot = new Map(top.map((m, i) => [m.model, i]));
-    seriesDef = top.map((m, i) => ({ name: m.model, slot: i }));
+    modelSeries = top.map((m, i) => ({ name: m.model, slot: i }));
     if (all.length > 3) {
-      seriesDef = [...seriesDef, { name: "Other", slot: 3 }];
+      modelSeries = [...modelSeries, { name: "Other", slot: 3 }];
     }
   }
   let status = $state<"loading" | "ready" | "error" | "browser">("loading");
@@ -64,16 +104,31 @@
     return `${date}T${pad(d.getHours())}:${min}`;
   }
 
-  // The store omits empty buckets; rebuild the full expected axis.
-  function fillBuckets(rows: ModelBucket[], preset: RangePreset, firstTs: string | null): Bar[] {
-    // bucket key → slot → tokens_out
+  // Bucket → slot → value for the active metric: stacked per model, or a single
+  // slot-0 series for Sessions (which isn't model-attributable).
+  function bucketMap(): Map<string, Map<number, number>> {
+    const def = METRICS[metric];
     const byKey = new Map<string, Map<number, number>>();
-    for (const r of rows) {
-      const slot = modelSlot.get(r.model) ?? 3; // unmapped models fold into Other
-      const m = byKey.get(r.bucket) ?? new Map<number, number>();
-      m.set(slot, (m.get(slot) ?? 0) + r.tokens_out);
-      byKey.set(r.bucket, m);
+    if (def.field) {
+      for (const r of modelRows) {
+        const slot = modelSlot.get(r.model) ?? 3; // unmapped models fold into Other
+        const m = byKey.get(r.bucket) ?? new Map<number, number>();
+        m.set(slot, (m.get(slot) ?? 0) + def.field(r));
+        byKey.set(r.bucket, m);
+      }
+    } else {
+      for (const r of sessionRows) byKey.set(r.bucket, new Map([[0, r.sessions]]));
     }
+    return byKey;
+  }
+
+  // The store omits empty buckets; rebuild the full expected axis and stack.
+  function buildAxis(
+    byKey: Map<string, Map<number, number>>,
+    series: Series[],
+    preset: RangePreset,
+    firstTs: string | null,
+  ): Bar[] {
     const stepMs = preset.bucket === "minute" ? 60_000 : preset.bucket === "hour" ? 3_600_000 : 86_400_000;
     const now = new Date();
     let start: Date;
@@ -88,11 +143,7 @@
       const m = byKey.get(key);
       out.push({
         label: key.replace("T", " "),
-        segments: seriesDef.map((s) => ({
-          slot: s.slot,
-          name: s.name,
-          value: m?.get(s.slot) ?? 0,
-        })),
+        segments: series.map((s) => ({ slot: s.slot, name: s.name, value: m?.get(s.slot) ?? 0 })),
       });
     }
     // Sparse ticks: ~6 across, last bucket labeled unless a regular tick crowds it.
@@ -107,10 +158,22 @@
     return out;
   }
 
+  const activeMetric = $derived(METRICS[metric]);
+  const chartSeries: Series[] = $derived(
+    activeMetric.field ? modelSeries : [{ name: "Sessions", slot: 0 }],
+  );
+  // Recomputes on metric change with no refetch — switching tiles is instant.
+  const bars: Bar[] = $derived(
+    overview ? buildAxis(bucketMap(), chartSeries, range, overview.first_ts) : [],
+  );
+
   async function load() {
     overview = await getOverview(range.hours);
-    bars = fillBuckets(await getSeriesByModel(range.hours, range.bucket), range, overview.first_ts);
-    models = await getByModel(range.hours);
+    [modelRows, sessionRows, models] = await Promise.all([
+      getSeriesByModel(range.hours, range.bucket),
+      getSeriesSessions(range.hours, range.bucket),
+      getByModel(range.hours),
+    ]);
   }
 
   async function selectRange(p: RangePreset) {
@@ -165,17 +228,37 @@
   <p class="note error">Collector error: {errorMsg}</p>
 {:else if overview}
   <section class="tiles">
-    <StatTile label="Sessions" value={fmt(overview.sessions)} tip={TIPS["Sessions"]} />
-    <StatTile label="Turns" value={fmt(overview.turns)} tip={TIPS["Turns"]} />
-    <StatTile label="Input tokens" value={fmt(overview.tokens_in)} hint="uncached" tip={TIPS["Input tokens"]} />
-    <StatTile label="Output tokens" value={fmt(overview.tokens_out)} tip={TIPS["Output tokens"]} />
-    <StatTile label="Cache reads" value={fmt(overview.cache_read)} hint="tokens served from cache" tip={TIPS["Cache reads"]} />
-    <StatTile label="Cache writes" value={fmt(overview.cache_write)} hint="tokens written to cache" tip={TIPS["Cache writes"]} />
+    <StatTile label="Spend" value={money(overview.cost)} hint="estimated" tip={TIPS["Spend"]}
+      onselect={() => (metric = "spend")} active={metric === "spend"} />
+    <StatTile label="Sessions" value={fmt(overview.sessions)} tip={TIPS["Sessions"]}
+      onselect={() => (metric = "sessions")} active={metric === "sessions"} />
+    <StatTile label="Turns" value={fmt(overview.turns)} tip={TIPS["Turns"]}
+      onselect={() => (metric = "turns")} active={metric === "turns"} />
+    <StatTile label="Input tokens" value={fmt(overview.tokens_in)} hint="uncached" tip={TIPS["Input tokens"]}
+      onselect={() => (metric = "input")} active={metric === "input"} />
+    <StatTile label="Output tokens" value={fmt(overview.tokens_out)} tip={TIPS["Output tokens"]}
+      onselect={() => (metric = "output")} active={metric === "output"} />
+    <StatTile label="Cache reads" value={fmt(overview.cache_read)} hint="tokens served from cache" tip={TIPS["Cache reads"]}
+      onselect={() => (metric = "cache_read")} active={metric === "cache_read"} />
+    <StatTile label="Cache writes" value={fmt(overview.cache_write)} hint="tokens written to cache" tip={TIPS["Cache writes"]}
+      onselect={() => (metric = "cache_write")} active={metric === "cache_write"} />
   </section>
 
   <section class="panel">
-    <h2>Output tokens per {bucketName} <span class="sub">{range.label === "All" ? "all time" : `last ${range.label}`} · by model</span></h2>
-    <BarChart {bars} series={seriesDef} unit="output tokens" />
+    <h2>
+      {activeMetric.label} per {bucketName}
+      <span class="sub">
+        {range.label === "All" ? "all time" : `last ${range.label}`}
+        {activeMetric.field ? "· by model" : "· distinct sessions active"}
+      </span>
+    </h2>
+    <p class="pickhint">Click any tile above to change this chart.</p>
+    <svelte:boundary onerror={(e) => console.error("BarChart error:", e)}>
+      <BarChart {bars} series={chartSeries} unit={activeMetric.unit} money={activeMetric.money} animate={metric} />
+      {#snippet failed(error)}
+        <p class="note error">Chart couldn't render: {error instanceof Error ? error.message : String(error)}</p>
+      {/snippet}
+    </svelte:boundary>
   </section>
 
   {#if models.length > 0}
@@ -191,6 +274,7 @@
               <th>Output</th>
               <th>Cache read</th>
               <th>Cache write</th>
+              <th>Cost</th>
             </tr>
           </thead>
           <tbody>
@@ -202,9 +286,17 @@
                 <td>{fmt(m.tokens_out)}</td>
                 <td>{fmt(m.cache_read)}</td>
                 <td>{fmt(m.cache_write)}</td>
+                <td class="cost">{m.cost > 0 ? money(m.cost) : "—"}</td>
               </tr>
             {/each}
           </tbody>
+          <tfoot>
+            <tr>
+              <td class="model">Total</td>
+              <td colspan="5"></td>
+              <td class="cost">{money(overview.cost)}</td>
+            </tr>
+          </tfoot>
         </table>
       </div>
     </section>
@@ -270,6 +362,11 @@
     color: var(--text-muted);
     font-size: 0.8rem;
   }
+  .pickhint {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    margin: -0.4rem 0 0.6rem;
+  }
   .table-wrap {
     overflow-x: auto;
   }
@@ -301,6 +398,19 @@
     text-align: left;
     font-family: ui-monospace, monospace;
     font-size: 0.8rem;
+  }
+  td.cost {
+    font-variant-numeric: tabular-nums;
+  }
+  tfoot td {
+    border-top: 1px solid var(--border);
+    border-bottom: none;
+    font-weight: 600;
+    padding-top: 0.5rem;
+  }
+  tfoot td.model {
+    font-family: inherit;
+    color: var(--text-secondary);
   }
   .ghosts {
     display: grid;

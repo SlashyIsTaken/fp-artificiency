@@ -26,16 +26,22 @@
 
   async function refresh() {
     try {
-      limits = await getUsageLimits();
+      const next = await getUsageLimits();
+      // Keep the last-good values on a transient miss (rate limit / offline) —
+      // the backend already falls back to its cache, and retaining here means
+      // the widget never flickers away. It only appears once we've seen data.
+      if (next && next.length > 0) limits = next;
     } catch {
-      limits = null; // fail open: no widget over a broken widget
+      /* keep whatever we last had */
     }
   }
 
   onMount(() => {
     if (!inTauri()) return;
     refresh();
-    const t = setInterval(refresh, 60_000);
+    // Usage percentages move slowly and the endpoint is rate-limited (shared
+    // with Claude Code), so poll gently — every 5 minutes.
+    const t = setInterval(refresh, 300_000);
     return () => clearInterval(t);
   });
 </script>

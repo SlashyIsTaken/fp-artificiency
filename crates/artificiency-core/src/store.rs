@@ -2,7 +2,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use crate::Result;
+use crate::collectors::limits::UsageLimit;
+use crate::pricing;
+use crate::{Error, Result};
 
 const SCHEMA: &str = include_str!("schema.sql");
 
@@ -80,13 +82,30 @@ pub struct ModelUsage {
     pub tokens_out: i64,
     pub cache_read: i64,
     pub cache_write: i64,
+    /// Estimated USD cost of this model's usage in the range (0 if unpriced).
+    pub cost: f64,
 }
 
+/// Per-(bucket, model) rollup carrying every chartable metric, so the UI can
+/// switch which metric the stacked chart shows without re-querying.
 #[derive(Debug, Serialize)]
 pub struct ModelBucket {
     pub bucket: String,
     pub model: String,
+    pub turns: i64,
+    pub tokens_in: i64,
     pub tokens_out: i64,
+    pub cache_read: i64,
+    pub cache_write: i64,
+    pub cost: f64,
+}
+
+/// Distinct sessions active per bucket. Sessions aren't attributable to a
+/// single model, so this is a separate single-series metric (not stacked).
+#[derive(Debug, Serialize)]
+pub struct SessionBucket {
+    pub bucket: String,
+    pub sessions: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -133,6 +152,8 @@ pub struct Overview {
     pub first_ts: Option<String>,
     pub last_ts: Option<String>,
     pub db_path: Option<String>,
+    /// Estimated total USD spend across priced models in the range.
+    pub cost: f64,
 }
 
 impl Store {
@@ -350,6 +371,28 @@ impl Store {
         Ok(sum)
     }
 
+    /// Remember the last successful subscription limits so a later fetch
+    /// failure (rate limit, offline) can fall back to them instead of the
+    /// widget vanishing.
+    pub fn cache_usage_limits(&self, limits: &[UsageLimit]) -> Result<()> {
+        let json = serde_json::to_string(limits).map_err(|e| Error::Other(e.to_string()))?;
+        self.conn.execute(
+            "INSERT INTO kv (key, value, updated_at) VALUES ('usage_limits', ?1, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            params![json],
+        )?;
+        Ok(())
+    }
+
+    /// The last cached subscription limits, if any were ever stored.
+    pub fn cached_usage_limits(&self) -> Result<Option<Vec<UsageLimit>>> {
+        let raw: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM kv WHERE key = 'usage_limits'", [], |r| r.get(0))
+            .optional()?;
+        Ok(raw.and_then(|s| serde_json::from_str(&s).ok()))
+    }
+
     pub fn file_offset(&self, path: &str) -> Result<u64> {
         let off: Option<i64> = self
             .conn
@@ -412,21 +455,51 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
-    /// Output tokens per (bucket, model) — the stacked-chart series.
+    /// Every chartable metric per (bucket, model) — the stacked-chart series.
     pub fn series_by_model(&self, hours: Option<i64>, bucket: Bucket) -> Result<Vec<ModelBucket>> {
         let (clause, param) = Self::since_clause(hours);
         let expr = bucket.sql_expr();
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {expr}, COALESCE(model, 'unknown'), SUM(tokens_out)
+            "SELECT {expr}, COALESCE(model, 'unknown'), COUNT(*), SUM(tokens_in),
+                    SUM(tokens_out), SUM(cache_read), SUM(cache_write)
              FROM events
              WHERE granularity = 'turn' {clause}
              GROUP BY 1, 2 ORDER BY 1"
         ))?;
         let rows = stmt.query_map(params![param], |r| {
+            let model: String = r.get(1)?;
+            let tokens_in: i64 = r.get(3)?;
+            let tokens_out: i64 = r.get(4)?;
+            let cache_read: i64 = r.get(5)?;
+            let cache_write: i64 = r.get(6)?;
             Ok(ModelBucket {
+                cost: pricing::cost_of(Some(&model), tokens_in, tokens_out, cache_read, cache_write),
                 bucket: r.get(0)?,
-                model: r.get(1)?,
-                tokens_out: r.get(2)?,
+                model,
+                turns: r.get(2)?,
+                tokens_in,
+                tokens_out,
+                cache_read,
+                cache_write,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Distinct sessions active per bucket (the non-stacked Sessions metric).
+    pub fn series_sessions(&self, hours: Option<i64>, bucket: Bucket) -> Result<Vec<SessionBucket>> {
+        let (clause, param) = Self::since_clause(hours);
+        let expr = bucket.sql_expr();
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {expr}, COUNT(DISTINCT session_id)
+             FROM events
+             WHERE granularity = 'turn' {clause}
+             GROUP BY 1 ORDER BY 1"
+        ))?;
+        let rows = stmt.query_map(params![param], |r| {
+            Ok(SessionBucket {
+                bucket: r.get(0)?,
+                sessions: r.get(1)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -444,13 +517,19 @@ impl Store {
              ORDER BY SUM(tokens_out) DESC"
         ))?;
         let rows = stmt.query_map(params![param], |r| {
+            let model: String = r.get(0)?;
+            let tokens_in: i64 = r.get(2)?;
+            let tokens_out: i64 = r.get(3)?;
+            let cache_read: i64 = r.get(4)?;
+            let cache_write: i64 = r.get(5)?;
             Ok(ModelUsage {
-                model: r.get(0)?,
+                cost: pricing::cost_of(Some(&model), tokens_in, tokens_out, cache_read, cache_write),
+                model,
                 turns: r.get(1)?,
-                tokens_in: r.get(2)?,
-                tokens_out: r.get(3)?,
-                cache_read: r.get(4)?,
-                cache_write: r.get(5)?,
+                tokens_in,
+                tokens_out,
+                cache_read,
+                cache_write,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -460,7 +539,7 @@ impl Store {
     /// Sessions counts sessions *active in the range* (distinct in events).
     pub fn overview(&self, hours: Option<i64>) -> Result<Overview> {
         let (clause, param) = Self::since_clause(hours);
-        let ov = self.conn.query_row(
+        let mut ov = self.conn.query_row(
             &format!(
                 "SELECT COUNT(*), COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0),
                         COALESCE(SUM(cache_read), 0), COALESCE(SUM(cache_write), 0),
@@ -482,6 +561,32 @@ impl Store {
                 })
             },
         )?;
+        // Cost is per-model, so sum the priced model rollups rather than
+        // pricing the flat aggregate (which has mixed models at one rate).
+        ov.cost = self.by_model(hours)?.iter().map(|m| m.cost).sum();
         Ok(ov)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_limits_cache_round_trips() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(store.cached_usage_limits().unwrap().is_none()); // nothing yet
+        let limits = vec![UsageLimit {
+            kind: "session".into(),
+            label: "Session".into(),
+            percent: 77,
+            severity: "warning".into(),
+            resets_at: Some("2026-07-14T14:20:00Z".into()),
+        }];
+        store.cache_usage_limits(&limits).unwrap();
+        assert_eq!(store.cached_usage_limits().unwrap().as_deref(), Some(limits.as_slice()));
+        // A later successful fetch overwrites the cache.
+        store.cache_usage_limits(&[]).unwrap();
+        assert_eq!(store.cached_usage_limits().unwrap(), Some(vec![]));
     }
 }

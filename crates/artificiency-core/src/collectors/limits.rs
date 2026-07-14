@@ -10,13 +10,13 @@
 //! without a subscription have no limits — everything here fails open to
 //! `None` and the UI hides the widget.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct UsageLimit {
     pub kind: String,
     pub label: String,

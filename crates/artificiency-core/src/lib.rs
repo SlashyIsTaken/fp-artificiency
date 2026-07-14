@@ -1,4 +1,5 @@
 pub mod collectors;
+pub mod pricing;
 pub mod store;
 
 pub use store::{Overview, Store};

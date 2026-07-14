@@ -49,6 +49,14 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 CREATE INDEX IF NOT EXISTS idx_tool_calls_ts ON tool_calls (ts);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_lookup ON tool_calls (session_id, tool, target);
 
+-- Small key/value cache. Used for last-good subscription limits so a transient
+-- fetch failure (e.g. a 429 on the shared OAuth token) doesn't blank the widget.
+CREATE TABLE IF NOT EXISTS kv (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TEXT
+);
+
 -- Incremental ingestion bookkeeping: byte offset per source file.
 CREATE TABLE IF NOT EXISTS ingest_files (
   path        TEXT PRIMARY KEY,

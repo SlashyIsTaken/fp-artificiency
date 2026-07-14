@@ -1,16 +1,23 @@
 <script lang="ts">
+  import { untrack } from "svelte";
+  import { Tween, prefersReducedMotion } from "svelte/motion";
+  import { cubicOut } from "svelte/easing";
   import InfoTip from "./InfoTip.svelte";
 
   let {
     label,
     value,
+    num,
+    format,
     hint,
     tip,
     onselect,
     active = false,
   }: {
     label: string;
-    value: string;
+    value?: string; // static display; use when the value isn't a live number
+    num?: number; // animated numeric value; pair with `format`
+    format?: (n: number) => string;
     hint?: string;
     tip?: string;
     // When set, the tile becomes a chart-metric selector: clicking it drives
@@ -18,6 +25,22 @@
     onselect?: () => void;
     active?: boolean;
   } = $props();
+
+  // Odometer: roll up to a growing value; snap on shrink (range change) or
+  // when the user prefers reduced motion. Seed from the initial value (untrack:
+  // capturing the initial is intended; the $effect below tracks later changes).
+  const rolled = new Tween(untrack(() => num) ?? 0, { easing: cubicOut });
+  let prev = untrack(() => num) ?? 0;
+  $effect(() => {
+    const v = num ?? 0;
+    const grew = v > prev;
+    prev = v;
+    rolled.set(v, { duration: grew && !prefersReducedMotion.current ? 600 : 0 });
+  });
+
+  const shown = $derived(
+    num !== undefined && format ? format(rolled.current) : (value ?? ""),
+  );
 </script>
 
 <!-- A real <button> when selectable (native focus + Enter/Space), a plain
@@ -35,7 +58,7 @@
   <div class="label">
     {#if tip}<InfoTip text={label} {tip} />{:else}{label}{/if}
   </div>
-  <div class="value">{value}</div>
+  <div class="value">{shown}</div>
   {#if hint}<div class="hint">{hint}</div>{/if}
 </svelte:element>
 

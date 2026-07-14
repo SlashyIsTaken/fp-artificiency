@@ -91,6 +91,19 @@ export interface UsageLimit {
   resets_at: string | null;
 }
 
+export interface ConfigFinding {
+  key: string;
+  change: string; // added | modified | removed
+  severity: string; // info | warning | critical
+  detail: string;
+}
+
+export interface ConfigFile {
+  path: string;
+  status: string; // watching | clean | changed
+  findings: ConfigFinding[];
+}
+
 export function inTauri(): boolean {
   return "__TAURI_INTERNALS__" in window;
 }
@@ -110,3 +123,5 @@ export const getSeriesByModel = (hours: number, bucket: string) =>
 export const getSeriesSessions = (hours: number, bucket: string) =>
   invoke<SessionBucket[]>("series_sessions", { hours, bucket });
 export const getUsageLimits = () => invoke<UsageLimit[] | null>("usage_limits");
+export const getConfigIntegrity = () => invoke<ConfigFile[]>("config_integrity");
+export const reviewConfig = (path: string) => invoke<void>("review_config", { path });

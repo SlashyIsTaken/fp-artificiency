@@ -1,5 +1,6 @@
 use artificiency_core::collectors::limits::{self, UsageLimit};
 use artificiency_core::collectors::{claude_code, IngestReport};
+use artificiency_core::integrity::{self, ConfigFile};
 use artificiency_core::store::{
     BigResult, Bucket, DupRead, ModelBucket, ModelUsage, SessionBucket, ToolStat, UsageBucket,
     WasteSummary,
@@ -123,6 +124,18 @@ fn backfill() -> Result<IngestReport, String> {
     claude_code::backfill(&store, &dir).map_err(|e| e.to_string())
 }
 
+/// Config integrity findings for the watched user-level config files.
+#[tauri::command]
+fn config_integrity() -> Result<Vec<ConfigFile>, String> {
+    Ok(integrity::check(&open_store()?))
+}
+
+/// Accept a config file's current content as its new baseline.
+#[tauri::command]
+fn review_config(path: String) -> Result<(), String> {
+    integrity::review(&open_store()?, &path).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -137,7 +150,9 @@ pub fn run() {
             waste_summary,
             duplicate_reads,
             largest_results,
-            tool_stats
+            tool_stats,
+            config_integrity,
+            review_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -186,20 +186,54 @@
     }
   }
 
-  onMount(async () => {
+  const POLL_MS = 3000;
+  let polling = false;
+
+  // Live refresh: re-scan for new activity, then reload. Cheap — the ingest is
+  // incremental (only appended bytes). Skipped while hidden; a transient error
+  // keeps the last-good view rather than flipping to an error state.
+  async function poll() {
+    if (polling || document.hidden) return;
+    polling = true;
+    try {
+      await runBackfill();
+      await load();
+    } catch {
+      /* transient; keep the last good data */
+    } finally {
+      polling = false;
+    }
+  }
+
+  onMount(() => {
     if (!inTauri()) {
       status = "browser";
       return;
     }
-    try {
-      ingest = await runBackfill();
-      await initSeries();
-      await load();
-      status = "ready";
-    } catch (e) {
-      errorMsg = String(e);
-      status = "error";
-    }
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const onVisible = () => {
+      if (!document.hidden) poll(); // catch up the instant the window is shown
+    };
+    // Kick off async init, then start the visible-only poll loop. onMount's
+    // cleanup only registers when returned synchronously, so init runs detached.
+    (async () => {
+      try {
+        ingest = await runBackfill();
+        await initSeries();
+        await load();
+        status = "ready";
+      } catch (e) {
+        errorMsg = String(e);
+        status = "error";
+        return;
+      }
+      timer = setInterval(poll, POLL_MS);
+      document.addEventListener("visibilitychange", onVisible);
+    })();
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   });
 
   const bucketName = $derived(
@@ -228,19 +262,19 @@
   <p class="note error">Collector error: {errorMsg}</p>
 {:else if overview}
   <section class="tiles">
-    <StatTile label="Spend" value={money(overview.cost)} hint="estimated" tip={TIPS["Spend"]}
+    <StatTile label="Spend" num={overview.cost} format={money} hint="estimated" tip={TIPS["Spend"]}
       onselect={() => (metric = "spend")} active={metric === "spend"} />
-    <StatTile label="Sessions" value={fmt(overview.sessions)} tip={TIPS["Sessions"]}
+    <StatTile label="Sessions" num={overview.sessions} format={fmt} tip={TIPS["Sessions"]}
       onselect={() => (metric = "sessions")} active={metric === "sessions"} />
-    <StatTile label="Turns" value={fmt(overview.turns)} tip={TIPS["Turns"]}
+    <StatTile label="Turns" num={overview.turns} format={fmt} tip={TIPS["Turns"]}
       onselect={() => (metric = "turns")} active={metric === "turns"} />
-    <StatTile label="Input tokens" value={fmt(overview.tokens_in)} hint="uncached" tip={TIPS["Input tokens"]}
+    <StatTile label="Input tokens" num={overview.tokens_in} format={fmt} hint="uncached" tip={TIPS["Input tokens"]}
       onselect={() => (metric = "input")} active={metric === "input"} />
-    <StatTile label="Output tokens" value={fmt(overview.tokens_out)} tip={TIPS["Output tokens"]}
+    <StatTile label="Output tokens" num={overview.tokens_out} format={fmt} tip={TIPS["Output tokens"]}
       onselect={() => (metric = "output")} active={metric === "output"} />
-    <StatTile label="Cache reads" value={fmt(overview.cache_read)} hint="tokens served from cache" tip={TIPS["Cache reads"]}
+    <StatTile label="Cache reads" num={overview.cache_read} format={fmt} hint="tokens served from cache" tip={TIPS["Cache reads"]}
       onselect={() => (metric = "cache_read")} active={metric === "cache_read"} />
-    <StatTile label="Cache writes" value={fmt(overview.cache_write)} hint="tokens written to cache" tip={TIPS["Cache writes"]}
+    <StatTile label="Cache writes" num={overview.cache_write} format={fmt} hint="tokens written to cache" tip={TIPS["Cache writes"]}
       onselect={() => (metric = "cache_write")} active={metric === "cache_write"} />
   </section>
 
@@ -307,11 +341,6 @@
       title="Plugin impact"
       question="Which plugin or config change actually saved you tokens?"
       action="Requires enrichment — coming soon"
-    />
-    <GhostPanel
-      title="Config integrity"
-      question="Have your Claude Code hooks been tampered with?"
-      action="Coming soon"
     />
   </section>
 

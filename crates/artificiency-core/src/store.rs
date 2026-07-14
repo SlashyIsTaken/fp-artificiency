@@ -384,6 +384,23 @@ impl Store {
         Ok(())
     }
 
+    /// Generic small-value store (config baselines, cached widgets, …).
+    pub fn kv_get(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM kv WHERE key = ?1", params![key], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn kv_set(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO kv (key, value, updated_at) VALUES (?1, ?2, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
     /// The last cached subscription limits, if any were ever stored.
     pub fn cached_usage_limits(&self) -> Result<Option<Vec<UsageLimit>>> {
         let raw: Option<String> = self

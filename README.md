@@ -6,6 +6,7 @@
 ![platform](https://img.shields.io/badge/platform-Linux%20(macOS%20%26%20Windows%20planned)-informational)
 ![provider](https://img.shields.io/badge/provider-Claude%20(more%20planned)-8A63D2)
 ![stack](https://img.shields.io/badge/built%20with-Rust%20%2B%20Tauri%20%2B%20Svelte%205-00AF00)
+![license](https://img.shields.io/badge/license-MIT-blue)
 
 <!-- Add once the repo path is public:
 ![CI](https://github.com/<owner>/fp-artificiency/actions/workflows/ci.yml/badge.svg)
@@ -25,13 +26,12 @@ leave it.
 
 ## Screenshots
 
-> Being added as the UI stabilises.
-
-<!-- Drop images into docs/screenshots/ and uncomment:
 | Overview | Waste diagnosis |
 |---|---|
 | ![Overview dashboard](docs/screenshots/overview.png) | ![Waste diagnosis](docs/screenshots/waste.png) |
--->
+
+> The dashboard is under active visual development, so these will change. See
+> [docs/screenshots](./docs/screenshots) for how to refresh them.
 
 ---
 
@@ -156,6 +156,10 @@ Thanks for the interest. Artificiency is still in its **design and early-constru
 phase**, and the architecture, schema, and UI are moving too quickly for outside
 contributions to be practical right now, so pull requests are not being accepted yet. That
 will change as the project stabilises. In the meantime, issues and ideas are welcome.
+
+## License
+
+[MIT](./LICENSE) © 2026 Floran Prins
 
 ---
 

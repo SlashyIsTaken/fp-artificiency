@@ -141,6 +141,17 @@ pub struct WasteSummary {
     pub biggest_chars: i64,
 }
 
+/// One turn's raw usage, for before/after distribution math.
+#[derive(Debug)]
+pub struct TurnRow {
+    pub model: Option<String>,
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    pub cache_read: i64,
+    pub cache_write: i64,
+    pub session_id: String,
+}
+
 #[derive(Debug, Serialize, Default)]
 pub struct Overview {
     pub sessions: i64,
@@ -185,9 +196,13 @@ impl Store {
         // Stores populated before tool-call collection existed have consumed
         // the transcripts already; reset offsets once so tool calls get
         // backfilled (event dedup keys make the re-read idempotent).
+        // Same one-time offset reset when a table's collector is newer than the
+        // ingested data (tool calls, then hook calls). Dedup keys keep re-reads
+        // idempotent.
         let tools: i64 = conn.query_row("SELECT COUNT(*) FROM tool_calls", [], |r| r.get(0))?;
+        let hooks: i64 = conn.query_row("SELECT COUNT(*) FROM hook_calls", [], |r| r.get(0))?;
         let events: i64 = conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))?;
-        if tools == 0 && events > 0 {
+        if (tools == 0 || hooks == 0) && events > 0 {
             conn.execute("DELETE FROM ingest_files", [])?;
         }
         Ok(())
@@ -399,6 +414,72 @@ impl Store {
             params![key, value],
         )?;
         Ok(())
+    }
+
+    /// Append a timeline marker (plugin/config change, user tag) at now.
+    pub fn record_marker(&self, kind: &str, payload: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO markers (ts, kind, payload) VALUES (datetime('now'), ?1, ?2)",
+            params![kind, payload],
+        )?;
+        Ok(())
+    }
+
+    /// Markers of one kind as (ts, payload), oldest first.
+    pub fn markers(&self, kind: &str) -> Result<Vec<(String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT ts, COALESCE(payload, '') FROM markers WHERE kind = ?1 ORDER BY ts")?;
+        let rows = stmt.query_map(params![kind], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Raw per-turn rows in [start, end) (ISO ts, lexicographic == chronological),
+    /// for computing before/after distributions.
+    pub fn turns_in_window(&self, start: &str, end: &str) -> Result<Vec<TurnRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT model, tokens_in, tokens_out, cache_read, cache_write, session_id
+             FROM events WHERE granularity = 'turn' AND ts >= ?1 AND ts < ?2",
+        )?;
+        let rows = stmt.query_map(params![start, end], |r| {
+            Ok(TurnRow {
+                model: r.get(0)?,
+                tokens_in: r.get(1)?,
+                tokens_out: r.get(2)?,
+                cache_read: r.get(3)?,
+                cache_write: r.get(4)?,
+                session_id: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn insert_hook_call(
+        &self,
+        session_id: &str,
+        ts: &str,
+        script: &str,
+        duration_ms: Option<i64>,
+        dedup_key: &str,
+    ) -> Result<bool> {
+        let n = self.conn.execute(
+            "INSERT OR IGNORE INTO hook_calls (session_id, ts, script, duration_ms, dedup_key)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![session_id, ts, script, duration_ms, dedup_key],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Hook cost aggregated per script within the range: (script, calls, total_ms).
+    pub fn hook_stats(&self, hours: Option<i64>) -> Result<Vec<(String, i64, i64)>> {
+        let (clause, param) = Self::since_clause(hours);
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT script, COUNT(*), COALESCE(SUM(duration_ms), 0)
+             FROM hook_calls WHERE 1=1 {clause}
+             GROUP BY script ORDER BY SUM(COALESCE(duration_ms, 0)) DESC"
+        ))?;
+        let rows = stmt.query_map(params![param], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
     /// The last cached subscription limits, if any were ever stored.

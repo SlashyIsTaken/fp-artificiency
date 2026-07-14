@@ -10,7 +10,6 @@
   } from "../api";
   import type { Overview, IngestReport, ModelBucket, SessionBucket, ModelUsage } from "../api";
   import StatTile from "../components/StatTile.svelte";
-  import GhostPanel from "../components/GhostPanel.svelte";
   import BarChart from "../components/BarChart.svelte";
   import type { Bar, Series } from "../components/BarChart.svelte";
   import RangeSelector from "../components/RangeSelector.svelte";
@@ -336,13 +335,6 @@
     </section>
   {/if}
 
-  <section class="ghosts">
-    <GhostPanel
-      title="Plugin impact"
-      question="Which plugin or config change actually saved you tokens?"
-      action="Requires enrichment — coming soon"
-    />
-  </section>
 
   {#if ingest && overview.db_path}
     <footer>
@@ -440,12 +432,6 @@
   tfoot td.model {
     font-family: inherit;
     color: var(--text-secondary);
-  }
-  .ghosts {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 0.75rem;
-    margin-top: 0.75rem;
   }
   .note {
     color: var(--text-secondary);

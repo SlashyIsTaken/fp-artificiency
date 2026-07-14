@@ -77,7 +77,8 @@ pub fn ingest_file(store: &Store, path: &Path, report: &mut IngestReport) -> Res
         let parsed = parse_line(&String::from_utf8_lossy(&buf));
         let empty = parsed.turn.is_none()
             && parsed.tool_uses.is_empty()
-            && parsed.tool_results.is_empty();
+            && parsed.tool_results.is_empty()
+            && parsed.hook_calls.is_empty();
         if let Some(turn) = parsed.turn {
             store.upsert_session(&turn.session_id, PROVIDER, turn.cwd.as_deref(), Some(&turn.ts))?;
             if store.insert_event(&turn.into_event())? {
@@ -95,6 +96,15 @@ pub fn ingest_file(store: &Store, path: &Path, report: &mut IngestReport) -> Res
         }
         for tr in &parsed.tool_results {
             store.set_tool_result_chars(&format!("{PROVIDER}:{}", tr.tool_use_id), tr.chars)?;
+        }
+        for hc in &parsed.hook_calls {
+            store.insert_hook_call(
+                &hc.session_id,
+                &hc.ts,
+                &hc.script,
+                hc.duration_ms,
+                &format!("{PROVIDER}:hook:{}:{}", hc.uuid, hc.idx),
+            )?;
         }
         if empty {
             report.lines_skipped += 1;
@@ -141,6 +151,28 @@ pub struct Parsed {
     pub turn: Option<Turn>,
     pub tool_uses: Vec<ToolUse>,
     pub tool_results: Vec<ToolResult>,
+    pub hook_calls: Vec<HookCall>,
+}
+
+#[derive(Debug)]
+pub struct HookCall {
+    pub session_id: String,
+    pub ts: String,
+    pub script: String,
+    pub duration_ms: Option<i64>,
+    pub uuid: String,
+    pub idx: usize, // position within the record's hookInfos, for the dedup key
+}
+
+/// The hook script name from a command. Commands reference
+/// `${CLAUDE_PLUGIN_ROOT}/hooks/<script>` (root unexpanded); we key on the
+/// script basename, falling back to the command's last token.
+fn hook_script(command: &str) -> String {
+    if let Some(rest) = command.split("${CLAUDE_PLUGIN_ROOT}/").nth(1) {
+        let path: String = rest.chars().take_while(|c| !"\"' \t".contains(*c)).collect();
+        return path.rsplit('/').next().unwrap_or(&path).to_string();
+    }
+    command.split_whitespace().last().unwrap_or(command).chars().take(40).collect()
 }
 
 #[derive(Debug)]
@@ -250,6 +282,28 @@ pub fn parse_line(line: &str) -> Parsed {
                     tool_use_id: id.to_string(),
                     chars,
                 });
+            }
+        }
+        "system" => {
+            if let Some(hooks) = v.get("hookInfos").and_then(Value::as_array) {
+                let uuid = v.get("uuid").and_then(Value::as_str).unwrap_or_default().to_string();
+                for (idx, h) in hooks.iter().enumerate() {
+                    let Some(cmd) = h.get("command").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    // durationMs is sometimes a number, sometimes a string.
+                    let duration_ms = h.get("durationMs").and_then(|d| {
+                        d.as_i64().or_else(|| d.as_str().and_then(|s| s.parse().ok()))
+                    });
+                    out.hook_calls.push(HookCall {
+                        session_id: session_id.to_string(),
+                        ts: ts.to_string(),
+                        script: hook_script(cmd),
+                        duration_ms,
+                        uuid: uuid.clone(),
+                        idx,
+                    });
+                }
             }
         }
         _ => {}

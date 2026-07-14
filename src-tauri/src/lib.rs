@@ -1,6 +1,7 @@
 use artificiency_core::collectors::limits::{self, UsageLimit};
 use artificiency_core::collectors::{claude_code, IngestReport};
 use artificiency_core::integrity::{self, ConfigFile};
+use artificiency_core::plugins::{self, Distribution, HookOverhead, PluginEvent};
 use artificiency_core::store::{
     BigResult, Bucket, DupRead, ModelBucket, ModelUsage, SessionBucket, ToolStat, UsageBucket,
     WasteSummary,
@@ -136,6 +137,25 @@ fn review_config(path: String) -> Result<(), String> {
     integrity::review(&open_store()?, &path).map_err(|e| e.to_string())
 }
 
+/// Plugin install/remove events for the impact timeline's event lines.
+#[tauri::command]
+fn plugin_events() -> Result<Vec<PluginEvent>, String> {
+    Ok(plugins::events(&open_store()?))
+}
+
+/// Per-turn distribution of `metric` over [start, end) (ISO). Called twice per
+/// event for a before/after comparison.
+#[tauri::command]
+fn metric_distribution(start: String, end: String, metric: String) -> Result<Distribution, String> {
+    plugins::metric_distribution(&open_store()?, &start, &end, &metric).map_err(|e| e.to_string())
+}
+
+/// Per-plugin hook overhead within the range.
+#[tauri::command]
+fn hook_overhead(hours: i64) -> Result<Vec<HookOverhead>, String> {
+    plugins::hook_overhead(&open_store()?, range(hours)).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -152,7 +172,10 @@ pub fn run() {
             largest_results,
             tool_stats,
             config_integrity,
-            review_config
+            review_config,
+            plugin_events,
+            metric_distribution,
+            hook_overhead
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

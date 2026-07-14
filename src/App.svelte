@@ -4,12 +4,13 @@
   import Overview from "./lib/dashboards/Overview.svelte";
   import Waste from "./lib/dashboards/Waste.svelte";
   import Integrity from "./lib/dashboards/Integrity.svelte";
+  import PluginImpact from "./lib/dashboards/PluginImpact.svelte";
 
   const NAV: NavItem[] = [
     { id: "overview", label: "Overview", enabled: true },
     { id: "waste", label: "Waste diagnosis", enabled: true },
+    { id: "plugins", label: "Plugin impact", enabled: true },
     { id: "integrity", label: "Config integrity", enabled: true },
-    { id: "plugins", label: "Plugin impact", enabled: false },
   ];
 
   let active = $state("overview");
@@ -22,6 +23,8 @@
       <Overview />
     {:else if active === "waste"}
       <Waste />
+    {:else if active === "plugins"}
+      <PluginImpact />
     {:else if active === "integrity"}
       <Integrity />
     {/if}

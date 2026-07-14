@@ -1,5 +1,6 @@
 pub mod collectors;
 pub mod integrity;
+pub mod plugins;
 pub mod pricing;
 pub mod store;
 

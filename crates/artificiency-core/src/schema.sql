@@ -49,6 +49,21 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 CREATE INDEX IF NOT EXISTS idx_tool_calls_ts ON tool_calls (ts);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_lookup ON tool_calls (session_id, tool, target);
 
+-- One row per plugin hook invocation (from transcript `hookInfos`), for the
+-- plugin-impact hook-overhead view. `script` is the hook script basename;
+-- `${CLAUDE_PLUGIN_ROOT}` in the command is unexpanded, so a shared script name
+-- can't always be attributed to a single plugin.
+CREATE TABLE IF NOT EXISTS hook_calls (
+  id          INTEGER PRIMARY KEY,
+  session_id  TEXT NOT NULL,
+  ts          TEXT NOT NULL,
+  script      TEXT NOT NULL,
+  duration_ms INTEGER,
+  dedup_key   TEXT UNIQUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_hook_calls_ts ON hook_calls (ts);
+
 -- Small key/value cache. Used for last-good subscription limits so a transient
 -- fetch failure (e.g. a 429 on the shared OAuth token) doesn't blank the widget.
 CREATE TABLE IF NOT EXISTS kv (

@@ -104,6 +104,29 @@ export interface ConfigFile {
   findings: ConfigFinding[];
 }
 
+export interface PluginEvent {
+  plugin: string;
+  kind: string; // installed | removed
+  ts: string;
+}
+
+export interface Distribution {
+  count: number;
+  sessions: number;
+  p25: number;
+  median: number;
+  p75: number;
+  mean: number;
+}
+
+export interface HookOverhead {
+  script: string;
+  plugin: string;
+  calls: number;
+  total_ms: number;
+  avg_ms: number;
+}
+
 export function inTauri(): boolean {
   return "__TAURI_INTERNALS__" in window;
 }
@@ -125,3 +148,8 @@ export const getSeriesSessions = (hours: number, bucket: string) =>
 export const getUsageLimits = () => invoke<UsageLimit[] | null>("usage_limits");
 export const getConfigIntegrity = () => invoke<ConfigFile[]>("config_integrity");
 export const reviewConfig = (path: string) => invoke<void>("review_config", { path });
+export const getPluginEvents = () => invoke<PluginEvent[]>("plugin_events");
+export const getMetricDistribution = (start: string, end: string, metric: string) =>
+  invoke<Distribution>("metric_distribution", { start, end, metric });
+export const getHookOverhead = (hours: number) =>
+  invoke<HookOverhead[]>("hook_overhead", { hours });

@@ -17,7 +17,7 @@
   <img src="https://github.com/SlashyIsTaken/fp-artificiency/actions/workflows/ci.yml/badge.svg" alt="CI" />
 </p>
 
-Every usage tracker tells you *how much* you spent. Artificiency tells you **why**. It shows
+Most usage trackers tell you *how much* you spent. Artificiency tells you **why**. It shows
 where the tokens actually went (re-read files, oversized tool dumps, cache churn, subagent
 overhead), and whether the change you made (a new plugin, an edited `CLAUDE.md`, a different
 workflow) actually helped. It runs entirely on your machine, and your transcripts never
@@ -25,7 +25,8 @@ leave it.
 
 > ⚠️ **Early development.** Artificiency is pre-1.0 and under active design and
 > construction. Interfaces, the data schema, and the UI change frequently, and there are
-> no released builds yet. The way to run it today is to build from source (below).
+> no stable releases yet. To run it today, grab a [preview build](#download) or build from
+> source (both below).
 
 ---
 
@@ -61,10 +62,33 @@ support for **all three desktop platforms** and **many AI providers**.
 |---|---|---|
 | Platform | Linux | **macOS** and **Windows** as first-class targets. |
 | Provider | Claude | Codex, Gemini, OpenRouter and others. Provider is a dimension, not a fork, so multiple sources combine into one dashboard |
-| Distribution | Build from source | Signed, downloadable builds per platform |
+| Distribution | Unsigned preview builds, or build from source | Signed, stable release builds per platform |
 
-macOS and Windows are not officially supported yet, but the code is written to run there,
-and if you would like to try it early you can build it yourself with the steps below.
+macOS and Windows are not officially supported yet, but the code is written to run there.
+If you would like to try it early you can grab a preview build or build it yourself.
+
+---
+
+## Download
+
+Preview builds for Linux, macOS, and Windows are published on the
+[Releases page](https://github.com/SlashyIsTaken/fp-artificiency/releases). Download the
+installer for your platform and run it.
+
+> ⚠️ **Preview builds are unstable and untested.** They are cut automatically from a tagged
+> commit, with no quality gate. Expect bugs, breaking changes between versions, and features
+> that appear and disappear. Everything runs locally, so the only thing at risk is your
+> patience, not your transcripts.
+
+The builds are **not code-signed**, so your system will warn you the first time you open
+one:
+
+- **macOS:** right-click the app and choose *Open*, then confirm. A plain double-click stays
+  blocked on unsigned apps.
+- **Windows:** on the SmartScreen prompt, click *More info*, then *Run anyway*.
+- **Linux:** make the AppImage executable (`chmod +x`), or install the `.deb` or `.rpm`.
+
+Would you rather build it yourself? See [Build from source](#build-from-source) below.
 
 ---
 

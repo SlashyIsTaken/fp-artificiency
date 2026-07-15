@@ -49,11 +49,12 @@
 
   async function load() {
     showAllDups = showAllBiggest = showAllTools = false;
+    const dayAligned = range.bucket === "day";
     try {
-      summary = await getWasteSummary(range.hours);
-      dups = await getDuplicateReads(range.hours);
-      biggest = await getLargestResults(range.hours);
-      tools = await getToolStats(range.hours);
+      summary = await getWasteSummary(range.hours, dayAligned);
+      dups = await getDuplicateReads(range.hours, dayAligned);
+      biggest = await getLargestResults(range.hours, dayAligned);
+      tools = await getToolStats(range.hours, dayAligned);
       errorMsg = "";
     } catch (e) {
       errorMsg = String(e);

@@ -133,7 +133,7 @@
   async function loadSeries() {
     [rows, hooks] = await Promise.all([
       getSeriesByModel(range.hours, range.bucket),
-      getHookOverhead(range.hours),
+      getHookOverhead(range.hours, range.bucket === "day"),
     ]);
   }
 
@@ -156,7 +156,7 @@
       [rows, events, hooks] = await Promise.all([
         getSeriesByModel(range.hours, range.bucket),
         getPluginEvents(),
-        getHookOverhead(range.hours),
+        getHookOverhead(range.hours, range.bucket === "day"),
       ]);
       if (events.length) selected = events.length - 1; // default to the newest event
       status = "ready";

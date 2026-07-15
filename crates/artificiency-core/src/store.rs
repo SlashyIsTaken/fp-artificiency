@@ -287,8 +287,8 @@ impl Store {
     }
 
     /// Calls and result volume per tool within the range, largest volume first.
-    pub fn tool_stats(&self, hours: Option<i64>) -> Result<Vec<ToolStat>> {
-        let (clause, param) = Self::since_clause(hours);
+    pub fn tool_stats(&self, hours: Option<i64>, day_aligned: bool) -> Result<Vec<ToolStat>> {
+        let (clause, param) = Self::since_clause(hours, day_aligned);
         let mut stmt = self.conn.prepare(&format!(
             "SELECT tool, COUNT(*), COALESCE(SUM(result_chars), 0)
              FROM tool_calls WHERE 1=1 {clause}
@@ -307,8 +307,13 @@ impl Store {
     /// Files read more than once within a session, aggregated across sessions,
     /// worst waste first. Wasted volume estimates the repeats at the file's
     /// average result size.
-    pub fn duplicate_reads(&self, hours: Option<i64>, limit: i64) -> Result<Vec<DupRead>> {
-        let (clause, param) = Self::since_clause(hours);
+    pub fn duplicate_reads(
+        &self,
+        hours: Option<i64>,
+        limit: i64,
+        day_aligned: bool,
+    ) -> Result<Vec<DupRead>> {
+        let (clause, param) = Self::since_clause(hours, day_aligned);
         let mut stmt = self.conn.prepare(&format!(
             "SELECT target, SUM(cnt), SUM(cnt - 1),
                     CAST(SUM((cnt - 1.0) * avg_chars) AS INTEGER), COUNT(*)
@@ -334,8 +339,13 @@ impl Store {
     }
 
     /// Largest single tool results within the range.
-    pub fn largest_results(&self, hours: Option<i64>, limit: i64) -> Result<Vec<BigResult>> {
-        let (clause, param) = Self::since_clause(hours);
+    pub fn largest_results(
+        &self,
+        hours: Option<i64>,
+        limit: i64,
+        day_aligned: bool,
+    ) -> Result<Vec<BigResult>> {
+        let (clause, param) = Self::since_clause(hours, day_aligned);
         let mut stmt = self.conn.prepare(&format!(
             "SELECT tool, target, result_chars, ts FROM tool_calls
              WHERE result_chars IS NOT NULL {clause}
@@ -352,8 +362,8 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
-    pub fn waste_summary(&self, hours: Option<i64>) -> Result<WasteSummary> {
-        let (clause, param) = Self::since_clause(hours);
+    pub fn waste_summary(&self, hours: Option<i64>, day_aligned: bool) -> Result<WasteSummary> {
+        let (clause, param) = Self::since_clause(hours, day_aligned);
         let mut sum = self.conn.query_row(
             &format!(
                 "SELECT COUNT(*), COALESCE(MAX(result_chars), 0)
@@ -368,7 +378,7 @@ impl Store {
                 })
             },
         )?;
-        let (clause, param) = Self::since_clause(hours);
+        let (clause, param) = Self::since_clause(hours, day_aligned);
         (sum.extra_reads, sum.wasted_chars) = self.conn.query_row(
             &format!(
                 "SELECT COALESCE(SUM(cnt - 1), 0),
@@ -471,8 +481,8 @@ impl Store {
     }
 
     /// Hook cost aggregated per script within the range: (script, calls, total_ms).
-    pub fn hook_stats(&self, hours: Option<i64>) -> Result<Vec<(String, i64, i64)>> {
-        let (clause, param) = Self::since_clause(hours);
+    pub fn hook_stats(&self, hours: Option<i64>, day_aligned: bool) -> Result<Vec<(String, i64, i64)>> {
+        let (clause, param) = Self::since_clause(hours, day_aligned);
         let mut stmt = self.conn.prepare(&format!(
             "SELECT script, COUNT(*), COALESCE(SUM(duration_ms), 0)
              FROM hook_calls WHERE 1=1 {clause}
@@ -518,8 +528,19 @@ impl Store {
     /// SQL fragment + parameter for range filtering. `hours = None` means
     /// all time. The threshold is rendered in the same ISO-T shape as stored
     /// timestamps so plain string comparison is correct.
-    fn since_clause(hours: Option<i64>) -> (&'static str, Option<String>) {
+    ///
+    /// `day_aligned` snaps the start back to local midnight: day+ frames
+    /// (7d/30d/3mo) would otherwise slide with the wall clock, so their totals
+    /// visibly shrink through the day as the trailing edge advances. Anchored
+    /// to midnight, the window only drops a day at the local date rollover.
+    /// The snap runs in localtime (matching the bucket expressions) then
+    /// converts back to UTC to compare against the raw-UTC `ts`.
+    fn since_clause(hours: Option<i64>, day_aligned: bool) -> (&'static str, Option<String>) {
         match hours {
+            Some(h) if day_aligned => (
+                "AND ts >= strftime('%Y-%m-%dT%H:%M:%S', 'now', 'localtime', ?1, 'start of day', 'utc')",
+                Some(format!("-{h} hours")),
+            ),
             Some(h) => (
                 "AND ts >= strftime('%Y-%m-%dT%H:%M:%S', 'now', ?1)",
                 Some(format!("-{h} hours")),
@@ -531,7 +552,7 @@ impl Store {
     /// Bucketed turn totals over the last `hours` (or all time). Buckets
     /// without activity are absent; the UI fills gaps.
     pub fn series(&self, hours: Option<i64>, bucket: Bucket) -> Result<Vec<UsageBucket>> {
-        let (clause, param) = Self::since_clause(hours);
+        let (clause, param) = Self::since_clause(hours, matches!(bucket, Bucket::Day));
         let expr = bucket.sql_expr();
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {expr}, COUNT(*), SUM(tokens_in), SUM(tokens_out),
@@ -555,7 +576,7 @@ impl Store {
 
     /// Every chartable metric per (bucket, model) — the stacked-chart series.
     pub fn series_by_model(&self, hours: Option<i64>, bucket: Bucket) -> Result<Vec<ModelBucket>> {
-        let (clause, param) = Self::since_clause(hours);
+        let (clause, param) = Self::since_clause(hours, matches!(bucket, Bucket::Day));
         let expr = bucket.sql_expr();
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {expr}, COALESCE(model, 'unknown'), COUNT(*), SUM(tokens_in),
@@ -586,7 +607,7 @@ impl Store {
 
     /// Distinct sessions active per bucket (the non-stacked Sessions metric).
     pub fn series_sessions(&self, hours: Option<i64>, bucket: Bucket) -> Result<Vec<SessionBucket>> {
-        let (clause, param) = Self::since_clause(hours);
+        let (clause, param) = Self::since_clause(hours, matches!(bucket, Bucket::Day));
         let expr = bucket.sql_expr();
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {expr}, COUNT(DISTINCT session_id)
@@ -604,8 +625,8 @@ impl Store {
     }
 
     /// Totals per model within the range, largest output first.
-    pub fn by_model(&self, hours: Option<i64>) -> Result<Vec<ModelUsage>> {
-        let (clause, param) = Self::since_clause(hours);
+    pub fn by_model(&self, hours: Option<i64>, day_aligned: bool) -> Result<Vec<ModelUsage>> {
+        let (clause, param) = Self::since_clause(hours, day_aligned);
         let mut stmt = self.conn.prepare(&format!(
             "SELECT COALESCE(model, 'unknown'), COUNT(*), SUM(tokens_in),
                     SUM(tokens_out), SUM(cache_read), SUM(cache_write)
@@ -635,8 +656,8 @@ impl Store {
 
     /// Totals over the last `hours`, or all time when `hours` is None.
     /// Sessions counts sessions *active in the range* (distinct in events).
-    pub fn overview(&self, hours: Option<i64>) -> Result<Overview> {
-        let (clause, param) = Self::since_clause(hours);
+    pub fn overview(&self, hours: Option<i64>, day_aligned: bool) -> Result<Overview> {
+        let (clause, param) = Self::since_clause(hours, day_aligned);
         let mut ov = self.conn.query_row(
             &format!(
                 "SELECT COUNT(*), COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0),
@@ -661,7 +682,7 @@ impl Store {
         )?;
         // Cost is per-model, so sum the priced model rollups rather than
         // pricing the flat aggregate (which has mixed models at one rate).
-        ov.cost = self.by_model(hours)?.iter().map(|m| m.cost).sum();
+        ov.cost = self.by_model(hours, day_aligned)?.iter().map(|m| m.cost).sum();
         Ok(ov)
     }
 }

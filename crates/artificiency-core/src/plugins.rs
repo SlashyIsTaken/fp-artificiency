@@ -164,10 +164,14 @@ pub struct HookOverhead {
 
 /// Hook cost per script within the range, attributed to a plugin where the
 /// script name is unique to one installed plugin.
-pub fn hook_overhead(store: &Store, hours: Option<i64>) -> Result<Vec<HookOverhead>> {
+pub fn hook_overhead(
+    store: &Store,
+    hours: Option<i64>,
+    day_aligned: bool,
+) -> Result<Vec<HookOverhead>> {
     let owners = script_owners();
     Ok(store
-        .hook_stats(hours)?
+        .hook_stats(hours, day_aligned)?
         .into_iter()
         .map(|(script, calls, total_ms)| {
             let plugin = match owners.get(&script) {

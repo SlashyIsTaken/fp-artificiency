@@ -372,20 +372,20 @@ mod tests {
                 .unwrap();
             store.set_tool_result_chars(id, chars).unwrap();
         }
-        let dups = store.duplicate_reads(None, 10).unwrap();
+        let dups = store.duplicate_reads(None, 10, false).unwrap();
         assert_eq!(dups.len(), 1); // only s-1 has a duplicate
         assert_eq!(dups[0].target, "/repo/a.rs");
         assert_eq!(dups[0].reads, 2);
         assert_eq!(dups[0].extra, 1);
         assert_eq!(dups[0].wasted_chars, 1000);
 
-        let sum = store.waste_summary(None).unwrap();
+        let sum = store.waste_summary(None, false).unwrap();
         assert_eq!(sum.tool_calls, 3);
         assert_eq!(sum.extra_reads, 1);
         assert_eq!(sum.wasted_chars, 1000);
         assert_eq!(sum.biggest_chars, 1000);
 
-        let stats = store.tool_stats(None).unwrap();
+        let stats = store.tool_stats(None, false).unwrap();
         assert_eq!(stats[0].tool, "Read");
         assert_eq!(stats[0].calls, 3);
         assert_eq!(stats[0].chars, 2500);
@@ -420,7 +420,7 @@ mod tests {
         ingest_file(&store, &path, &mut report3).unwrap();
         assert_eq!(report3.events_added, 1);
 
-        let ov = store.overview(None).unwrap();
+        let ov = store.overview(None, false).unwrap();
         assert_eq!(ov.turns, 2);
         assert_eq!(ov.tokens_in, 5743);
         assert_eq!(ov.sessions, 1);
@@ -431,14 +431,14 @@ mod tests {
         assert_eq!(series[0].turns, 2);
         assert_eq!(series[0].tokens_out, 477);
 
-        let models = store.by_model(None).unwrap();
+        let models = store.by_model(None, false).unwrap();
         assert_eq!(models.len(), 2); // opus + the model-less second turn
         assert_eq!(models[0].model, "claude-opus-4-8");
         assert_eq!(models[1].model, "unknown");
 
         // Range filtering: the fixed 2026-07-13 timestamps are in the past,
         // so a 1-hour window is empty.
-        let recent = store.overview(Some(1)).unwrap();
+        let recent = store.overview(Some(1), false).unwrap();
         assert_eq!(recent.turns, 0);
         assert_eq!(recent.sessions, 0);
 

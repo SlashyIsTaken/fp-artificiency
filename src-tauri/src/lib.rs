@@ -20,9 +20,11 @@ fn range(hours: i64) -> Option<i64> {
 }
 
 #[tauri::command]
-fn overview(hours: i64) -> Result<Overview, String> {
+fn overview(hours: i64, day_aligned: bool) -> Result<Overview, String> {
     let store = open_store()?;
-    let mut ov = store.overview(range(hours)).map_err(|e| e.to_string())?;
+    let mut ov = store
+        .overview(range(hours), day_aligned)
+        .map_err(|e| e.to_string())?;
     ov.db_path = Some(Store::default_path().display().to_string());
     Ok(ov)
 }
@@ -35,9 +37,9 @@ fn series(hours: i64, bucket: String) -> Result<Vec<UsageBucket>, String> {
 }
 
 #[tauri::command]
-fn by_model(hours: i64) -> Result<Vec<ModelUsage>, String> {
+fn by_model(hours: i64, day_aligned: bool) -> Result<Vec<ModelUsage>, String> {
     open_store()?
-        .by_model(range(hours))
+        .by_model(range(hours), day_aligned)
         .map_err(|e| e.to_string())
 }
 
@@ -94,30 +96,30 @@ fn subscription() -> Option<String> {
 }
 
 #[tauri::command]
-fn waste_summary(hours: i64) -> Result<WasteSummary, String> {
+fn waste_summary(hours: i64, day_aligned: bool) -> Result<WasteSummary, String> {
     open_store()?
-        .waste_summary(range(hours))
+        .waste_summary(range(hours), day_aligned)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn duplicate_reads(hours: i64) -> Result<Vec<DupRead>, String> {
+fn duplicate_reads(hours: i64, day_aligned: bool) -> Result<Vec<DupRead>, String> {
     open_store()?
-        .duplicate_reads(range(hours), 15)
+        .duplicate_reads(range(hours), 15, day_aligned)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn largest_results(hours: i64) -> Result<Vec<BigResult>, String> {
+fn largest_results(hours: i64, day_aligned: bool) -> Result<Vec<BigResult>, String> {
     open_store()?
-        .largest_results(range(hours), 10)
+        .largest_results(range(hours), 10, day_aligned)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn tool_stats(hours: i64) -> Result<Vec<ToolStat>, String> {
+fn tool_stats(hours: i64, day_aligned: bool) -> Result<Vec<ToolStat>, String> {
     open_store()?
-        .tool_stats(range(hours))
+        .tool_stats(range(hours), day_aligned)
         .map_err(|e| e.to_string())
 }
 
@@ -159,8 +161,8 @@ fn metric_distribution(start: String, end: String, metric: String) -> Result<Dis
 
 /// Per-plugin hook overhead within the range.
 #[tauri::command]
-fn hook_overhead(hours: i64) -> Result<Vec<HookOverhead>, String> {
-    plugins::hook_overhead(&open_store()?, range(hours)).map_err(|e| e.to_string())
+fn hook_overhead(hours: i64, day_aligned: bool) -> Result<Vec<HookOverhead>, String> {
+    plugins::hook_overhead(&open_store()?, range(hours), day_aligned).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

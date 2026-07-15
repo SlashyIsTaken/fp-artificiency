@@ -77,7 +77,7 @@
   let modelSlot = new Map<string, number>();
 
   async function initSeries() {
-    const all = await getByModel(0);
+    const all = await getByModel(0, false); // all-time: alignment is a no-op
     const top = all.slice(0, 3);
     modelSlot = new Map(top.map((m, i) => [m.model, i]));
     modelSeries = top.map((m, i) => ({ name: m.model, slot: i }));
@@ -134,7 +134,16 @@
     const now = new Date();
     let start: Date;
     if (preset.hours > 0) {
-      start = new Date(now.getTime() - preset.hours * 3_600_000 + stepMs);
+      const raw = now.getTime() - preset.hours * 3_600_000;
+      if (preset.bucket === "day") {
+        // Match the backend's day-aligned window: snap the first bucket to
+        // local midnight so the axis left edge doesn't slide with the clock.
+        const d = new Date(raw);
+        d.setHours(0, 0, 0, 0);
+        start = d;
+      } else {
+        start = new Date(raw + stepMs);
+      }
     } else {
       start = firstTs ? new Date(firstTs) : now;
     }
@@ -169,11 +178,12 @@
   );
 
   async function load() {
-    overview = await getOverview(range.hours);
+    const dayAligned = range.bucket === "day";
+    overview = await getOverview(range.hours, dayAligned);
     [modelRows, sessionRows, models] = await Promise.all([
       getSeriesByModel(range.hours, range.bucket),
       getSeriesSessions(range.hours, range.bucket),
-      getByModel(range.hours),
+      getByModel(range.hours, dayAligned),
     ]);
   }
 

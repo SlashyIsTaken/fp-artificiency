@@ -20,8 +20,11 @@
 
 <nav>
   <div class="brand">
-    <div class="name">Artificiency</div>
-    <div class="tag">Artificial Efficiency</div>
+    <img class="logo" src="/logo.png" alt="" />
+    <div>
+      <div class="name">Artificiency</div>
+      <div class="tag">Artificial Efficiency</div>
+    </div>
   </div>
   {#each items as item}
     <button
@@ -54,7 +57,16 @@
     overflow-y: auto;
   }
   .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
     padding: 0 0.6rem 1rem;
+  }
+  .logo {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    flex-shrink: 0;
   }
   .name {
     font-weight: 700;

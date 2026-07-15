@@ -1,13 +1,21 @@
-# Artificiency
+<p align="center">
+  <img src="public/logo.png" alt="Artificiency logo" width="80" />
+</p>
 
-**Flarepoint | Artificial Efficiency.** Local-first analytics for your AI coding usage.
+<h1 align="center">Artificiency</h1>
 
-![status](https://img.shields.io/badge/status-in%20development-orange)
-![platform](https://img.shields.io/badge/platform-Linux%20%2F%20macOS%20%2F%20Windows-informational)
-![provider](https://img.shields.io/badge/provider-Claude%20(more%20later)-8A63D2)
-![stack](https://img.shields.io/badge/built%20with-Rust%20%2F%20Tauri%20%2F%20Svelte%205-00AF00)
-![license](https://img.shields.io/badge/license-MIT-blue)
-![CI](https://github.com/SlashyIsTaken/fp-artificiency/actions/workflows/ci.yml/badge.svg)
+<p align="center">
+  <strong>Flarepoint | Artificial Efficiency.</strong> Local-first analytics for your AI coding usage.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/status-in%20development-orange" alt="status" />
+  <img src="https://img.shields.io/badge/platform-Linux%20%2F%20macOS%20%2F%20Windows-informational" alt="platform" />
+  <img src="https://img.shields.io/badge/provider-Claude%20(more%20later)-8A63D2" alt="provider" />
+  <img src="https://img.shields.io/badge/built%20with-Rust%20%2F%20Tauri%20%2F%20Svelte%205-00AF00" alt="stack" />
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="license" />
+  <img src="https://github.com/SlashyIsTaken/fp-artificiency/actions/workflows/ci.yml/badge.svg" alt="CI" />
+</p>
 
 Every usage tracker tells you *how much* you spent. Artificiency tells you **why**. It shows
 where the tokens actually went (re-read files, oversized tool dumps, cache churn, subagent

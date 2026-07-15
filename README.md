@@ -3,14 +3,11 @@
 **Flarepoint | Artificial Efficiency.** Local-first analytics for your AI coding usage.
 
 ![status](https://img.shields.io/badge/status-in%20development-orange)
-![platform](https://img.shields.io/badge/platform-Linux%20(macOS%20%26%20Windows%20planned)-informational)
-![provider](https://img.shields.io/badge/provider-Claude%20(more%20planned)-8A63D2)
-![stack](https://img.shields.io/badge/built%20with-Rust%20%2B%20Tauri%20%2B%20Svelte%205-00AF00)
+![platform](https://img.shields.io/badge/platform-Linux%20%2F%20macOS%20%2F%20Windows-informational)
+![provider](https://img.shields.io/badge/provider-Claude%20(more%20later)-8A63D2)
+![stack](https://img.shields.io/badge/built%20with-Rust%20%2F%20Tauri%20%2F%20Svelte%205-00AF00)
 ![license](https://img.shields.io/badge/license-MIT-blue)
-
-<!-- Add once the repo path is public:
-![CI](https://github.com/<owner>/fp-artificiency/actions/workflows/ci.yml/badge.svg)
--->
+![CI](https://github.com/SlashyIsTaken/fp-artificiency/actions/workflows/ci.yml/badge.svg)
 
 Every usage tracker tells you *how much* you spent. Artificiency tells you **why**. It shows
 where the tokens actually went (re-read files, oversized tool dumps, cache churn, subagent
@@ -30,8 +27,7 @@ leave it.
 |---|---|
 | ![Overview dashboard](docs/screenshots/overview.png) | ![Waste diagnosis](docs/screenshots/waste.png) |
 
-> The dashboard is under active visual development, so these will change. See
-> [docs/screenshots](./docs/screenshots) for how to refresh them.
+> The dashboard is under active visual development, so UI elements are subject to change.
 
 ---
 

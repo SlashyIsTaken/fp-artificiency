@@ -63,6 +63,16 @@ try {
   fail(e.message);
 }
 
+// Cargo.toml's bump leaves Cargo.lock's workspace-member versions stale; resync
+// them so the lock lands in the same commit. --workspace touches only the local
+// crates, never registry deps.
+console.log("→ syncing Cargo.lock (cargo update --workspace)…");
+try {
+  execFileSync("cargo", ["update", "--workspace"], { stdio: "inherit" });
+} catch {
+  fail("cargo update --workspace failed; not releasing.");
+}
+
 try {
   gitInherit("commit", "-am", `chore: bump version to ${tag}`);
   gitInherit("tag", tag);

@@ -43,6 +43,8 @@ const edits = [
 ];
 
 // Rewrite the app version across all three files. Throws if any field is missing.
+// Cargo.lock is left to `cargo update --workspace` (see release.mjs), so bump
+// stays a pure, offline file rewrite.
 export function bump(version) {
   assertValidVersion(version);
   for (const { file, re } of edits) {

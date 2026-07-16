@@ -4,21 +4,22 @@
 //
 // The two Rust crates inherit from [workspace.package], so only the workspace
 // Cargo.toml is touched, not the per-crate manifests.
+//
+// Also the reusable core behind `npm run release`, which imports bump() and
+// assertValidVersion() rather than shelling out.
 import { readFileSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-const version = process.argv[2];
-if (!version) {
-  console.error("usage: npm run bump <version>   (e.g. npm run bump 0.1.1)");
-  process.exit(1);
-}
 // Bundlers reject non-semver, so fail here rather than deep in a release build.
-if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
-  console.error(`invalid semver version: "${version}"`);
-  process.exit(1);
+const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+export function assertValidVersion(version) {
+  if (!version || !SEMVER_RE.test(version)) {
+    throw new Error(`invalid semver version: "${version ?? ""}"`);
+  }
 }
 
 // Each edit is anchored so it hits the app version and nothing else (not the
@@ -41,16 +42,32 @@ const edits = [
   },
 ];
 
-for (const { file, re } of edits) {
-  const path = join(root, file);
-  const before = readFileSync(path, "utf8");
-  if (!re.test(before)) {
-    console.error(`could not find version field in ${file}; aborting.`);
-    process.exit(1);
+// Rewrite the app version across all three files. Throws if any field is missing.
+export function bump(version) {
+  assertValidVersion(version);
+  for (const { file, re } of edits) {
+    const path = join(root, file);
+    const before = readFileSync(path, "utf8");
+    if (!re.test(before)) {
+      throw new Error(`could not find version field in ${file}; aborting.`);
+    }
+    writeFileSync(path, before.replace(re, `$1${version}$2`));
+    console.log(`  ${file} -> ${version}`);
   }
-  const after = before.replace(re, `$1${version}$2`);
-  writeFileSync(path, after);
-  console.log(`  ${file} -> ${version}`);
 }
 
-console.log(`\nBumped to ${version}. Next: commit, then tag (git tag v${version}).`);
+// CLI: `npm run bump <version>` stays a pure file-rewrite primitive.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const version = process.argv[2];
+  if (!version) {
+    console.error("usage: npm run bump <version>   (e.g. npm run bump 0.1.1)");
+    process.exit(1);
+  }
+  try {
+    bump(version);
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
+  console.log(`\nBumped to ${version}. Next: commit, then tag (git tag v${version}).`);
+}

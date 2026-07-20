@@ -8,6 +8,8 @@
   <strong>Flarepoint | Artificial Efficiency.</strong> Local-first analytics for your AI coding usage.
 </p>
 
+<h4 align="center"><a href="https://artificiency.flarepoint.nl"><b>Website</b></a></h4>
+
 <p align="center">
   <img src="https://img.shields.io/badge/status-in%20development-orange" alt="status" />
   <img src="https://img.shields.io/badge/platform-Linux%20%2F%20macOS%20%2F%20Windows-informational" alt="platform" />
